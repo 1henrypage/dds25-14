@@ -1,7 +1,6 @@
 # Web-scale Data Management Project Template
 
 Basic project structure with Python's Flask and Redis. 
-**You are free to use any web framework in any language and any database you like for this project.**
 
 ### Project structure
 
@@ -36,6 +35,14 @@ After coding the REST endpoint logic run `docker-compose up --build` in the base
 ***Requirements:*** You need to have docker and docker-compose installed on your machine. 
 
 K8s is also possible, but we do not require it as part of your submission. 
+
+
+## Outdated Information (I think)
+
+> They said we are only allowed to use python and k8s was unnecessary in the lecture.
+
+**You are free to use any web framework in any language and any database you like for this project.**
+
 
 #### minikube (local k8s cluster)
 
