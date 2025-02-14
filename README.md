@@ -36,14 +36,6 @@ After coding the REST endpoint logic run `docker-compose up --build` in the base
 
 K8s is also possible, but we do not require it as part of your submission. 
 
-
-## Outdated Information (I think)
-
-> They said we are only allowed to use python and k8s was unnecessary in the lecture.
-
-**You are free to use any web framework in any language and any database you like for this project.**
-
-
 #### minikube (local k8s cluster)
 
 This setup is for local k8s testing to see if your k8s config works before deploying to the cloud. 
@@ -58,3 +50,13 @@ but you can find any database you want in https://artifacthub.io/ and adapt the 
 Similarly to the `minikube` deployment but run the `deploy-charts-cluster.sh` in the helm step to also install an ingress to the cluster. 
 
 ***Requirements:*** You need to have access to kubectl of a k8s cluster.
+
+
+## Outdated Information (I think)
+
+> They said we are only allowed to use python and k8s was unnecessary in the lecture.
+
+**You are free to use any web framework in any language and any database you like for this project.**
+
+
+
