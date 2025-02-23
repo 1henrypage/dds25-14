@@ -13,10 +13,7 @@ DB_ERROR_STR = "DB error"
 
 app = Flask("payment-service")
 
-db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
-                              port=int(os.environ['REDIS_PORT']),
-                              password=os.environ['REDIS_PASSWORD'],
-                              db=int(os.environ['REDIS_DB']))
+db: redis.RedisCluster = redis.RedisCluster(host=str(os.environ['MASTER_1']), port=int(os.environ['REDIS_PORT']), require_full_coverage=True)
 
 
 def close_db_connection():
@@ -50,8 +47,8 @@ def create_user():
     value = msgpack.encode(UserValue(credit=0))
     try:
         db.set(key, value)
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError as e:
+        return abort(400, str(e))
     return jsonify({'user_id': key})
 
 

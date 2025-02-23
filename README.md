@@ -58,5 +58,7 @@ Similarly to the `minikube` deployment but run the `deploy-charts-cluster.sh` in
 
 **You are free to use any web framework in any language and any database you like for this project.**
 
+cluster setup depends on container names change this. 
+
 
 

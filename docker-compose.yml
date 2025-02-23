@@ -1,8 +1,8 @@
 version: "3"
 services:
-
   gateway:
     image: nginx:1.25-bookworm
+    container_name: gateway
     volumes:
       - ./gateway_nginx.conf:/etc/nginx/nginx.conf:ro
     ports:
@@ -11,44 +11,214 @@ services:
       - order-service
       - stock-service
       - payment-service
+    networks:
+      - order-net
+      - stock-net
+      - payment-net
 
   order-service:
     build: ./order
     image: order:latest
+    container_name: order-service
     environment:
       - GATEWAY_URL=http://gateway:80
     command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+    restart: on-failure:5
     env_file:
       - env/order_redis.env
     depends_on:
-      - order-db
-
-  order-db:
-    image: redis:7.2-bookworm
-    command: redis-server --requirepass redis --maxmemory 512mb
+      - cluster-setup
+    networks:
+      - order-net
 
   stock-service:
     build: ./stock
     image: stock:latest
+    container_name: stock-service
     command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+    restart: on-failure:5
     env_file:
       - env/stock_redis.env
     depends_on:
-      - stock-db
-
-  stock-db:
-    image: redis:7.2-bookworm
-    command: redis-server --requirepass redis --maxmemory 512mb
+      - cluster-setup
+    networks:
+      - stock-net
 
   payment-service:
     build: ./payment
     image: user:latest
+    container_name: payment-service
     command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+    restart: on-failure:5
     env_file:
       - env/payment_redis.env
     depends_on:
-      - payment-db
+      - cluster-setup
+    networks:
+      - payment-net
 
-  payment-db:
-    image: redis:7.2-bookworm
-    command: redis-server --requirepass redis --maxmemory 512mb
+  order-master-1:
+    image: redis:7.4.2
+    container_name: order-master-1
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - order-net
+
+  order-master-2:
+    image: redis:7.4.2
+    container_name: order-master-2
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - order-net
+
+  order-master-3:
+    image: redis:7.4.2
+    container_name: order-master-3
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - order-net
+
+  order-replica-1:
+    image: redis:7.4.2
+    container_name: order-replica-1
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - order-net
+
+  order-replica-2:
+    image: redis:7.4.2
+    container_name: order-replica-2
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - order-net
+
+  order-replica-3:
+    image: redis:7.4.2
+    container_name: order-replica-3
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - order-net
+
+  # Payment domain
+  payment-master-1:
+    image: redis:7.4.2
+    container_name: payment-master-1
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - payment-net
+
+  payment-master-2:
+    image: redis:7.4.2
+    container_name: payment-master-2
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - payment-net
+
+  payment-master-3:
+    image: redis:7.4.2
+    container_name: payment-master-3
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - payment-net
+
+  payment-replica-1:
+    image: redis:7.4.2
+    container_name: payment-replica-1
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - payment-net
+
+  payment-replica-2:
+    image: redis:7.4.2
+    container_name: payment-replica-2
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - payment-net
+
+  payment-replica-3:
+    image: redis:7.4.2
+    container_name: payment-replica-3
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - payment-net
+
+  # Stock domain
+  stock-master-1:
+    image: redis:7.4.2
+    container_name: stock-master-1
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - stock-net
+
+  stock-master-2:
+    image: redis:7.4.2
+    container_name: stock-master-2
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - stock-net
+
+  stock-master-3:
+    image: redis:7.4.2
+    container_name: stock-master-3
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - stock-net
+
+  stock-replica-1:
+    image: redis:7.4.2
+    container_name: stock-replica-1
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - stock-net
+
+  stock-replica-2:
+    image: redis:7.4.2
+    container_name: stock-replica-2
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - stock-net
+
+  stock-replica-3:
+    image: redis:7.4.2
+    container_name: stock-replica-3
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
+    networks:
+      - stock-net
+
+  cluster-setup:
+    build: ./scripts/setup-db
+    container_name: cluster-setup
+    depends_on:
+      - payment-master-1
+      - payment-master-2
+      - payment-master-3
+      - payment-replica-1
+      - payment-replica-2
+      - payment-replica-3
+      - stock-master-1
+      - stock-master-2
+      - stock-master-3
+      - stock-replica-1
+      - stock-replica-2
+      - stock-replica-3
+      - order-master-1
+      - order-master-2
+      - order-master-3
+      - order-replica-1
+      - order-replica-2
+      - order-replica-3
+    networks:
+      - order-net
+      - stock-net
+      - payment-net
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+
+
+networks:
+  order-net:
+    driver: bridge
+  payment-net:
+    driver: bridge
+  stock-net:
+    driver: bridge
