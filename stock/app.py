@@ -13,10 +13,7 @@ DB_ERROR_STR = "DB error"
 
 app = Flask("stock-service")
 
-db: redis.Redis = redis.Redis(host=os.environ['REDIS_HOST'],
-                              port=int(os.environ['REDIS_PORT']),
-                              password=os.environ['REDIS_PASSWORD'],
-                              db=int(os.environ['REDIS_DB']))
+db: redis.RedisCluster = redis.RedisCluster(host=str(os.environ['MASTER_1']), port=int(os.environ['REDIS_PORT']), require_full_coverage=True)
 
 
 def close_db_connection():
