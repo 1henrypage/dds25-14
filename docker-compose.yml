@@ -23,7 +23,7 @@ services:
     environment:
       - GATEWAY_URL=http://gateway:80
     command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
-    restart: on-failure:5
+    restart: on-failure:10
     env_file:
       - env/order_redis.env
     depends_on:
@@ -36,7 +36,7 @@ services:
     image: stock:latest
     container_name: stock-service
     command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
-    restart: on-failure:5
+    restart: on-failure:10
     env_file:
       - env/stock_redis.env
     depends_on:
@@ -49,7 +49,7 @@ services:
     image: user:latest
     container_name: payment-service
     command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
-    restart: on-failure:5
+    restart: on-failure:10
     env_file:
       - env/payment_redis.env
     depends_on:
