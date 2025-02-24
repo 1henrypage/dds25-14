@@ -13,7 +13,6 @@ payment_replicas=("payment-replica-1" "payment-replica-2" "payment-replica-3")
 stock_masters=("stock-master-1" "stock-master-2" "stock-master-3")
 stock_replicas=("stock-replica-1" "stock-replica-2" "stock-replica-3")
 
-echo "WAITING TO STOP RACE CONDITIONS"
 sleep 1
 echo "RUNNING CLUSTER SETUP"
 
