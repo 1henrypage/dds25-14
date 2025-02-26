@@ -25,6 +25,12 @@ services:
     ports:
       - "5672:5672"   # AMQP protocol
       - "15672:15672" # Management UI
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
     networks:
       - order-net
       - stock-net
