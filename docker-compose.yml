@@ -16,6 +16,20 @@ services:
       - stock-net
       - payment-net
 
+  rabbitmq:
+    image: rabbitmq:4.0.6-management
+    container_name: rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: user
+      RABBITMQ_DEFAULT_PASS: password
+    ports:
+      - "5672:5672"   # AMQP protocol
+      - "15672:15672" # Management UI
+    networks:
+      - order-net
+      - stock-net
+      - payment-net
+
   order-service:
     build: ./order
     image: order:latest
