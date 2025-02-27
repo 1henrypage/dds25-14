@@ -48,8 +48,12 @@ services:
     depends_on:
       cluster-setup:
         condition: service_completed_successfully
+      common-setup:
+        condition: service_completed_successfully
     networks:
       - order-net
+    volumes:
+      - ./common:/home/common
 
   stock-service:
     build: ./stock
@@ -61,8 +65,12 @@ services:
     depends_on:
       cluster-setup:
         condition: service_completed_successfully
+      common-setup:
+        condition: service_completed_successfully
     networks:
       - stock-net
+    volumes:
+      - ./common:/home/common
 
   payment-service:
     build: ./payment
@@ -74,8 +82,12 @@ services:
     depends_on:
       cluster-setup:
         condition: service_completed_successfully
+      common-setup:
+        condition: service_completed_successfully
     networks:
       - payment-net
+    volumes:
+      - ./common:/home/common
 
   order-master-1:
     image: redis:7.4.2
@@ -234,6 +246,14 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
 
+  common-setup:
+    build: ./common
+    container_name: common-setup
+    volumes:
+      - ./common:/home/common
+
+volumes:
+  common:
 
 networks:
   order-net:

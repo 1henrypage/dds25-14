@@ -8,12 +8,13 @@ import redis
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 
+from common.redis_utils import connect_to_redis_cluster
 
 DB_ERROR_STR = "DB error"
 
 app = Flask("stock-service")
 
-db: redis.RedisCluster = redis.RedisCluster(host=str(os.environ['MASTER_1']), port=int(os.environ['REDIS_PORT']), require_full_coverage=True)
+db: redis.RedisCluster = connect_to_redis_cluster(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
 
 def close_db_connection():
