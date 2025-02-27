@@ -51,6 +51,9 @@ Similarly to the `minikube` deployment but run the `deploy-charts-cluster.sh` in
 
 ***Requirements:*** You need to have access to kubectl of a k8s cluster.
 
+## Group related info
+- If you want to update the requirements.txt to bring a dependency in. add your dependencies in `requirements.txt` in the project root. Then, run the update-requirements.sh script. It will override all the other ones.
+
 
 ## Outdated Information (I think)
 
