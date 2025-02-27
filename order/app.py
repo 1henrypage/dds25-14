@@ -11,6 +11,9 @@ import requests
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 
+import sys
+
+from common.redis_utils import connect_to_redis_cluster
 
 DB_ERROR_STR = "DB error"
 REQ_ERROR_STR = "Requests error"
@@ -19,7 +22,7 @@ GATEWAY_URL = os.environ['GATEWAY_URL']
 
 app = Flask("order-service")
 
-db: redis.RedisCluster = redis.RedisCluster(host=str(os.environ['MASTER_1']), port=int(os.environ['REDIS_PORT']), require_full_coverage=True)
+db: redis.RedisCluster = connect_to_redis_cluster(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
 
 def close_db_connection():
