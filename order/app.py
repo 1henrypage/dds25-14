@@ -10,7 +10,7 @@ import requests
 from msgspec import msgpack
 from flask import Flask, jsonify, abort, Response
 
-from common.redis_utils import configure_redis
+from common.redis_utils import configure_redis, get_from_db
 from model import OrderValue
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
@@ -18,17 +18,12 @@ app = Flask("order-service")
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
 def get_order_from_db(order_id: str) -> OrderValue | None:
-    try:
-        # get serialized data
-        entry: bytes = db.get(order_id)
-    except redis.exceptions.RedisError as e:
-        return abort(400, str(e))
-    # deserialize data if it exists else return null
-    entry: OrderValue | None = msgpack.decode(entry, type=OrderValue) if entry else None
-    if entry is None:
-        # if order does not exist in the database; abort
-        abort(400, f"Order: {order_id} not found!")
-    return entry
+    return get_from_db(
+        db=db,
+        key=order_id,
+        value_type=OrderValue
+    )
+
 
 
 @app.post('/create/<user_id>')

@@ -4,10 +4,11 @@ import uuid
 
 import redis
 
-from msgspec import msgpack, Struct
+from msgspec import msgpack
 from flask import Flask, jsonify, abort, Response
 
-from common.redis_utils import configure_redis
+from common.redis_utils import configure_redis, get_from_db
+
 from model import StockValue
 
 app = Flask("stock-service")
@@ -15,18 +16,11 @@ app = Flask("stock-service")
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
 def get_item_from_db(item_id: str) -> StockValue | None:
-    # get serialized data
-    try:
-        entry: bytes = db.get(item_id)
-    except redis.exceptions.RedisError as e:
-        return abort(400, str(e))
-    # deserialize data if it exists else return null
-    entry: StockValue | None = msgpack.decode(entry, type=StockValue) if entry else None
-    if entry is None:
-        # if item does not exist in the database; abort
-        abort(400, f"Item: {item_id} not found!")
-    return entry
-
+    return get_from_db(
+        db=db,
+        key=item_id,
+        value_type=StockValue
+    )
 
 @app.post('/item/create/<price>')
 def create_item(price: int):

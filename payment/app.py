@@ -4,26 +4,20 @@ import uuid
 
 import redis
 
-from msgspec import msgpack, Struct
+from msgspec import msgpack
 from flask import Flask, jsonify, abort, Response
 
-from common.redis_utils import configure_redis
+from common.redis_utils import configure_redis, get_from_db
 from model import UserValue
 app = Flask("payment-service")
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
 def get_user_from_db(user_id: str) -> UserValue | None:
-    try:
-        # get serialized data
-        entry: bytes = db.get(user_id)
-    except redis.exceptions.RedisError as e:
-        return abort(400, str(e))
-    # deserialize data if it exists else return null
-    entry: UserValue | None = msgpack.decode(entry, type=UserValue) if entry else None
-    if entry is None:
-        # if user does not exist in the database; abort
-        abort(400, f"User: {user_id} not found!")
-    return entry
+    return get_from_db(
+        db=db,
+        key=user_id,
+        value_type=UserValue
+    )
 
 @app.post('/create_user')
 def create_user():

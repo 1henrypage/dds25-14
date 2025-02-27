@@ -1,6 +1,11 @@
 
 import redis
 import atexit
+from typing import Type, TypeVar, Optional
+from flask import abort, Response
+from msgspec import msgpack
+
+T = TypeVar('T')
 
 def configure_redis(host: str, port: int = 6379) -> redis.RedisCluster:
     """
@@ -21,3 +26,14 @@ def configure_redis(host: str, port: int = 6379) -> redis.RedisCluster:
     atexit.register(lambda: db.close())
     return db
 
+def get_from_db(db: redis.RedisCluster, key: str, value_type: Type[T]) -> Optional[T]:
+    try:
+        entry: bytes = db.get(key)
+    except redis.exceptions.RedisError as e:
+        return abort(400, str(e))
+
+    entry: Optional[T] = msgpack.decode(entry, type=value_type) if entry else None
+    if entry is None:
+        abort(400, f"{value_type.__name__}: {key} not found!")
+
+    return entry
