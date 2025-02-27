@@ -27,6 +27,16 @@ def configure_redis(host: str, port: int = 6379) -> redis.RedisCluster:
     return db
 
 def get_from_db(db: redis.RedisCluster, key: str, value_type: Type[T]) -> Optional[T]:
+    """
+    Gets a value from a redis cluster by key. Does some failure handling
+    400 -> if redis fails for some reason
+    400 -> if key is not found
+
+    :param db: The cluster to retrieve from
+    :param key: The key to retrieve from
+    :param value_type: The type of the domain object. Can be OrderValue | StockValue | UserValue
+    :return: The value as a python object. Otherwise client error
+    """
     try:
         entry: bytes = db.get(key)
     except redis.exceptions.RedisError as e:
@@ -37,3 +47,21 @@ def get_from_db(db: redis.RedisCluster, key: str, value_type: Type[T]) -> Option
         abort(400, f"{value_type.__name__}: {key} not found!")
 
     return entry
+
+def set_in_db(db: redis.RedisCluster, key: str, value: bytes) -> None:
+    """
+    Sets a value from a redis cluster by key. Does some failure handling
+    400 -> if redis fails for some reason
+
+    :param db: The cluster to set the key in
+    :param key: The key to set
+    :param value: The value to set along with the associated key
+    :return: Nothing if successful, 400 if it failed for some reason
+    """
+
+    try:
+        db.set(key, value)
+    except redis.exceptions.RedisError as e:
+        return abort(400, str(e))
+    return None
+
