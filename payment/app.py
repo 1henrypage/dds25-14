@@ -1,6 +1,5 @@
 import logging
 import os
-import atexit
 import uuid
 
 import redis
@@ -8,39 +7,23 @@ import redis
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 
-from common.redis_utils import connect_to_redis_cluster
-
-DB_ERROR_STR = "DB error"
-
+from common.redis_utils import configure_redis
+from model import UserValue
 app = Flask("payment-service")
-
-db: redis.RedisCluster = connect_to_redis_cluster(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
-
-
-def close_db_connection():
-    db.close()
-
-
-atexit.register(close_db_connection)
-
-
-class UserValue(Struct):
-    credit: int
-
+db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
 def get_user_from_db(user_id: str) -> UserValue | None:
     try:
         # get serialized data
         entry: bytes = db.get(user_id)
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError as e:
+        return abort(400, str(e))
     # deserialize data if it exists else return null
     entry: UserValue | None = msgpack.decode(entry, type=UserValue) if entry else None
     if entry is None:
         # if user does not exist in the database; abort
         abort(400, f"User: {user_id} not found!")
     return entry
-
 
 @app.post('/create_user')
 def create_user():
@@ -61,8 +44,8 @@ def batch_init_users(n: int, starting_money: int):
                                   for i in range(n)}
     try:
         db.mset(kv_pairs)
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError as e:
+        return abort(400, str(e))
     return jsonify({"msg": "Batch init for users successful"})
 
 
@@ -84,8 +67,8 @@ def add_credit(user_id: str, amount: int):
     user_entry.credit += int(amount)
     try:
         db.set(user_id, msgpack.encode(user_entry))
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError as e:
+        return abort(400, str(e))
     return Response(f"User: {user_id} credit updated to: {user_entry.credit}", status=200)
 
 
@@ -99,8 +82,8 @@ def remove_credit(user_id: str, amount: int):
         abort(400, f"User: {user_id} credit cannot get reduced below zero!")
     try:
         db.set(user_id, msgpack.encode(user_entry))
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError as e:
+        return abort(400, str(e))
     return Response(f"User: {user_id} credit updated to: {user_entry.credit}", status=200)
 
 

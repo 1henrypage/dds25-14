@@ -1,6 +1,5 @@
 import logging
 import os
-import atexit
 import uuid
 
 import redis
@@ -8,33 +7,19 @@ import redis
 from msgspec import msgpack, Struct
 from flask import Flask, jsonify, abort, Response
 
-from common.redis_utils import connect_to_redis_cluster
-
-DB_ERROR_STR = "DB error"
+from common.redis_utils import configure_redis
+from model import StockValue
 
 app = Flask("stock-service")
 
-db: redis.RedisCluster = connect_to_redis_cluster(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
-
-
-def close_db_connection():
-    db.close()
-
-
-atexit.register(close_db_connection)
-
-
-class StockValue(Struct):
-    stock: int
-    price: int
-
+db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
 def get_item_from_db(item_id: str) -> StockValue | None:
     # get serialized data
     try:
         entry: bytes = db.get(item_id)
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError as e:
+        return abort(400, str(e))
     # deserialize data if it exists else return null
     entry: StockValue | None = msgpack.decode(entry, type=StockValue) if entry else None
     if entry is None:
@@ -50,8 +35,8 @@ def create_item(price: int):
     value = msgpack.encode(StockValue(stock=0, price=int(price)))
     try:
         db.set(key, value)
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError as e:
+        return abort(400, str(e))
     return jsonify({'item_id': key})
 
 
@@ -64,8 +49,8 @@ def batch_init_users(n: int, starting_stock: int, item_price: int):
                                   for i in range(n)}
     try:
         db.mset(kv_pairs)
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError as e:
+        return abort(400, str(e))
     return jsonify({"msg": "Batch init for stock successful"})
 
 
@@ -87,8 +72,8 @@ def add_stock(item_id: str, amount: int):
     item_entry.stock += int(amount)
     try:
         db.set(item_id, msgpack.encode(item_entry))
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError as e:
+        return abort(400, str(e))
     return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
 
 
@@ -102,8 +87,8 @@ def remove_stock(item_id: str, amount: int):
         abort(400, f"Item: {item_id} stock cannot get reduced below zero!")
     try:
         db.set(item_id, msgpack.encode(item_entry))
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError as e :
+        return abort(400, str(e))
     return Response(f"Item: {item_id} stock updated to: {item_entry.stock}", status=200)
 
 

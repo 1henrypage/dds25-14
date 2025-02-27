@@ -1,19 +1,23 @@
 
-import os
 import redis
+import atexit
 
-def connect_to_redis_cluster(host: str, port: int = 6379) -> redis.RedisCluster:
+def configure_redis(host: str, port: int = 6379) -> redis.RedisCluster:
     """
+    Connect to database and register a callback handler which terminates the database upon app termination.
 
-    :param host: The host of any redis node within the cluster
+    :param host: The host of any redis node within the cluster.
     :param port: The port number of the associated node
-    :return: An initialised cluster client
+    :return: An initialised cluster client.
     """
     host = str(host)
     port = int(port)
-    return redis.RedisCluster(
-        host=str(os.environ['MASTER_1']),
-        port=int(os.environ['REDIS_PORT']),
+    db = redis.RedisCluster(
+        host=host,
+        port=port,
+        decode_responses=False,
         require_full_coverage=True
     )
+    atexit.register(lambda: db.close())
+    return db
 

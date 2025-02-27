@@ -1,6 +1,5 @@
 import logging
 import os
-import atexit
 import random
 import uuid
 from collections import defaultdict
@@ -8,43 +7,22 @@ from collections import defaultdict
 import redis
 import requests
 
-from msgspec import msgpack, Struct
+from msgspec import msgpack
 from flask import Flask, jsonify, abort, Response
 
-import sys
-
-from common.redis_utils import connect_to_redis_cluster
-
-DB_ERROR_STR = "DB error"
-REQ_ERROR_STR = "Requests error"
+from common.redis_utils import configure_redis
+from model import OrderValue
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
-
 app = Flask("order-service")
-
-db: redis.RedisCluster = connect_to_redis_cluster(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
-
-
-def close_db_connection():
-    db.close()
-
-
-atexit.register(close_db_connection)
-
-
-class OrderValue(Struct):
-    paid: bool
-    items: list[tuple[str, int]]
-    user_id: str
-    total_cost: int
-
+db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
 def get_order_from_db(order_id: str) -> OrderValue | None:
     try:
         # get serialized data
         entry: bytes = db.get(order_id)
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError as e:
+        return abort(400, str(e))
     # deserialize data if it exists else return null
     entry: OrderValue | None = msgpack.decode(entry, type=OrderValue) if entry else None
     if entry is None:
@@ -59,8 +37,8 @@ def create_order(user_id: str):
     value = msgpack.encode(OrderValue(paid=False, items=[], user_id=user_id, total_cost=0))
     try:
         db.set(key, value)
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError as e:
+        return abort(400, str(e))
     return jsonify({'order_id': key})
 
 
@@ -86,8 +64,8 @@ def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
                                   for i in range(n)}
     try:
         db.mset(kv_pairs)
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError as e:
+        return abort(400, str(e))
     return jsonify({"msg": "Batch init for orders successful"})
 
 
@@ -108,8 +86,8 @@ def find_order(order_id: str):
 def send_post_request(url: str):
     try:
         response = requests.post(url)
-    except requests.exceptions.RequestException:
-        abort(400, REQ_ERROR_STR)
+    except requests.exceptions.RequestException as e:
+        abort(400, str(e))
     else:
         return response
 
@@ -117,8 +95,8 @@ def send_post_request(url: str):
 def send_get_request(url: str):
     try:
         response = requests.get(url)
-    except requests.exceptions.RequestException:
-        abort(400, REQ_ERROR_STR)
+    except requests.exceptions.RequestException as e:
+        abort(400, str(e))
     else:
         return response
 
@@ -135,8 +113,8 @@ def add_item(order_id: str, item_id: str, quantity: int):
     order_entry.total_cost += int(quantity) * item_json["price"]
     try:
         db.set(order_id, msgpack.encode(order_entry))
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError as e:
+        return abort(400, str(e))
     return Response(f"Item: {item_id} added to: {order_id} price updated to: {order_entry.total_cost}",
                     status=200)
 
@@ -172,8 +150,8 @@ def checkout(order_id: str):
     order_entry.paid = True
     try:
         db.set(order_id, msgpack.encode(order_entry))
-    except redis.exceptions.RedisError:
-        return abort(400, DB_ERROR_STR)
+    except redis.exceptions.RedisError as e:
+        return abort(400, str(e))
     app.logger.debug("Checkout successful")
     return Response("Checkout successful", status=200)
 
