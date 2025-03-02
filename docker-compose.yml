@@ -8,9 +8,9 @@ services:
     ports:
       - "8000:80"
     depends_on:
-      - order-service
-      - stock-service
-      - payment-service
+      - order-publisher
+      - payment-publisher
+      - stock-publisher
     networks:
       - order-net
       - stock-net
@@ -35,56 +35,121 @@ services:
       - stock-net
       - payment-net
 
-  order-service:
-    build: ./order
-    image: order:latest
-    container_name: order-service
+  order-publisher:
+    build: ./order-publisher
+    image: order-publisher:latest
+    container_name: order-publisher
     environment:
-      - GATEWAY_URL=http://gateway:80
-    command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
-    env_file:
-      - env/order_redis.env
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=order-egress
+    command: hypercorn --bind 0.0.0.0:5000 --workers 2 --graceful-timeout 30 --read-timeout 30 --log-level info app:app
     depends_on:
-      cluster-setup:
-        condition: service_completed_successfully
       common-setup:
         condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
     networks:
       - order-net
     volumes:
       - ./common:/home/common
 
-  stock-service:
-    build: ./stock
-    image: stock:latest
-    container_name: stock-service
-    command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+  order-worker:
+    build: ./order-worker
+    image: order-worker:latest
+    container_name: order-worker
     env_file:
-      - env/stock_redis.env
+      - env/order_redis.env
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=order-egress
+      - GATEWAY_URL=http://gateway:80
     depends_on:
       cluster-setup:
         condition: service_completed_successfully
       common-setup:
         condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - order-net
+    volumes:
+      - ./common:/home/common
+
+  payment-publisher:
+    build: ./payment-publisher
+    image: payment-publisher:latest
+    container_name: payment-publisher
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=payment-egress
+    command: hypercorn --bind 0.0.0.0:5000 --workers 2 --graceful-timeout 30 --read-timeout 30 --log-level info app:app
+    depends_on:
+      common-setup:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - payment-net
+    volumes:
+      - ./common:/home/common
+
+  payment-worker:
+    build: ./payment-worker
+    image: payment-worker:latest
+    container_name: payment-worker
+    env_file:
+      - env/payment_redis.env
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=payment-egress
+    depends_on:
+      cluster-setup:
+        condition: service_completed_successfully
+      common-setup:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - payment-net
+    volumes:
+      - ./common:/home/common
+
+  stock-publisher:
+    build: ./stock-publisher
+    image: stock-publisher:latest
+    container_name: stock-publisher
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=stock-egress
+    command: hypercorn --bind 0.0.0.0:5000 --workers 2 --graceful-timeout 30 --read-timeout 30 --log-level info app:app
+    depends_on:
+      common-setup:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
     networks:
       - stock-net
     volumes:
       - ./common:/home/common
 
-  payment-service:
-    build: ./payment
-    image: user:latest
-    container_name: payment-service
-    command: gunicorn -b 0.0.0.0:5000 -w 2 --timeout 30 --log-level=info app:app
+  stock-worker:
+    build: ./stock-worker
+    image: stock-worker:latest
+    container_name: stock-worker
     env_file:
-      - env/payment_redis.env
+      - env/stock_redis.env
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=stock-egress
     depends_on:
       cluster-setup:
         condition: service_completed_successfully
       common-setup:
         condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
     networks:
-      - payment-net
+      - stock-net
     volumes:
       - ./common:/home/common
 

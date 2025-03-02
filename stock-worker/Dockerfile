@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-WORKDIR /home/flask-app
+WORKDIR /home/worker
 
 COPY ./requirements.txt .
 
@@ -11,4 +11,4 @@ COPY . .
 # Add /home to the PYTHONPATH so that Python can locate the 'common' module
 ENV PYTHONPATH="${PYTHONPATH}:/home"
 
-EXPOSE 5000
+CMD ["python", "./worker.py"]

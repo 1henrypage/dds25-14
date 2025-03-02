@@ -7,7 +7,7 @@ import logging
 from common.request_utils import process_encoded_response_body
 from common.queue_utils import RpcClient
 
-app = Quart("order-publisher")
+app = Quart("payment-publisher")
 
 rpc_client: RpcClient = None
 
@@ -20,48 +20,55 @@ async def before_serving():
 async def after_serving():
     await rpc_client.disconnect()
 
-@app.post('/create/<user_id>')
-async def create_order(user_id: str):
-    response = await rpc_client.call(msg={"user_id": user_id}, msg_type="create")
+
+@app.post('/create_user')
+async def create_user():
+    response = await rpc_client.call(msg={}, msg_type="create_user")
     return process_encoded_response_body(
-        response=response,
+        response=response
     )
 
-@app.post('/batch_init/<n>/<n_items>/<n_users>/<item_price>')
-async def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
+
+@app.post('/batch_init/<n>/<starting_money>')
+async def batch_init_users(n: int, starting_money: int):
     response = await rpc_client.call(
-        msg={"n": int(n), "n_items": int(n_items), "n_users": int(n_users), "item_price": int(item_price)},
+        msg={"n": int(n), "starting_money": int(starting_money)},
         msg_type="batch_init"
     )
     return process_encoded_response_body(
         response=response,
     )
 
-@app.get('/find/<order_id>')
-async def find_order(order_id: str):
-    response = await rpc_client.call(msg={"order_id": order_id}, msg_type="find")
+
+@app.get('/find_user/<user_id>')
+async def find_user(user_id: str):
+    response = await rpc_client.call(msg={"user_id": user_id}, msg_type="find_user")
     return process_encoded_response_body(
         response=response,
     )
 
 
-@app.post('/addItem/<order_id>/<item_id>/<quantity>')
-async def add_item(order_id: str, item_id: str, quantity: int):
+@app.post('/add_funds/<user_id>/<amount>')
+async def add_credit(user_id: str, amount: int):
     response = await rpc_client.call(
-        msg={"order_id": order_id, "item_id": item_id, "quantity": int(quantity)},
-        msg_type="addItem"
+        msg={"user_id": user_id, "amount": int(amount)},
+        msg_type="add_funds"
     )
     return process_encoded_response_body(
         response=response,
     )
 
 
-@app.post('/checkout/<order_id>')
-async def checkout(order_id: str):
-    response = await rpc_client.call(msg={"order_id": order_id}, msg_type="checkout")
+@app.post('/pay/<user_id>/<amount>')
+async def remove_credit(user_id: str, amount: int):
+    response = await rpc_client.call(
+        msg={"user_id": user_id, "amount": int(amount)},
+        msg_type="pay"
+    )
     return process_encoded_response_body(
         response=response,
     )
+
 
 
 if __name__ == '__main__':
