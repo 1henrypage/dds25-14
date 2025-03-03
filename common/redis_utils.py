@@ -3,6 +3,7 @@ import redis
 import atexit
 from typing import Type, TypeVar, Optional
 from msgspec import msgpack
+from functools import wraps
 
 T = TypeVar('T')
 

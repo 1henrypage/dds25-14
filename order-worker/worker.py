@@ -8,9 +8,6 @@ from collections import defaultdict
 import redis
 import requests
 
-from aio_pika import Message, connect_robust
-from aio_pika.abc import AbstractIncomingMessage, DeliveryMode
-
 from msgspec import msgpack
 
 from common.queue_utils import consume_events
@@ -43,7 +40,6 @@ def create_order(user_id: str):
     )
 
 def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
-
     n = int(n)
     n_items = int(n_items)
     n_users = int(n_users)
@@ -101,6 +97,7 @@ def add_item(order_id: str, item_id: str, quantity: int):
         return create_error_message(str(e))
     if order_entry is None:
         return create_error_message(f"Order: {order_id} not found")
+
     item_reply = requests.get(f"{GATEWAY_URL}/stock/find/{item_id}")
     if item_reply.status_code != 200:
         return create_error_message(
