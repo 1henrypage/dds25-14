@@ -13,6 +13,7 @@ from aio_pika.abc import AbstractIncomingMessage, DeliveryMode
 
 from msgspec import msgpack
 
+from common.msg_types import MsgType
 from common.queue_utils import consume_events
 from common.request_utils import create_response_message, create_error_message
 from common.redis_utils import configure_redis, get_from_db
@@ -170,15 +171,22 @@ def checkout(order_id: str):
 
 
 def process_message(message_type, content):
-    if message_type == 'create':
+    """
+    Based on message type it delegates the call to a specific function.
+
+    :param message_type: The message type
+    :param content: The actual message content
+    :return: Processed response
+    """
+    if message_type == MsgType.CREATE:
         return create_order(user_id=content['user_id'])
-    elif message_type == 'batch_init':
+    elif message_type == MsgType.BATCH_INIT:
         return batch_init_users(n=content['n'], n_items=content['n_items'], n_users=content['n_users'], item_price=content['item_price'])
-    elif message_type == 'find':
+    elif message_type == MsgType.FIND:
         return find_order(order_id=content['order_id'])
-    elif message_type == 'addItem':
+    elif message_type == MsgType.ADD:
         return add_item(order_id=content['order_id'], item_id=content['item_id'], quantity=content['quantity'])
-    elif message_type == 'checkout':
+    elif message_type == MsgType.CHECKOUT:
         return checkout(content['order_id'])
 
     return create_error_message(
