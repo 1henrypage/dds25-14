@@ -6,7 +6,7 @@ import asyncio
 
 from common.msg_types import MsgType
 from common.queue_utils import consume_events
-from common.redis_utils import configure_redis, get_from_db
+from common.redis_utils import configure_redis
 from common.request_utils import create_error_message, create_response_message
 
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))

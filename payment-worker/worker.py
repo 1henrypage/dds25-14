@@ -7,7 +7,7 @@ import redis
 from common.msg_types import MsgType
 from common.queue_utils import consume_events
 from common.request_utils import create_response_message, create_error_message
-from common.redis_utils import configure_redis, get_from_db
+from common.redis_utils import configure_redis
 
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 

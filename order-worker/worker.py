@@ -13,7 +13,7 @@ from msgspec import msgpack
 from common.msg_types import MsgType
 from common.queue_utils import consume_events
 from common.request_utils import create_response_message, create_error_message
-from common.redis_utils import configure_redis, get_from_db
+from common.redis_utils import configure_redis
 from model import OrderValue
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
@@ -21,12 +21,16 @@ GATEWAY_URL = os.environ['GATEWAY_URL']
 
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
-def get_order_from_db(order_id: str) ->  OrderValue | None:
-    return get_from_db(
-        db=db,
-        key=order_id,
-        value_type=OrderValue
-    )
+def get_order_from_db(order_id: str):
+    """
+    Gets an order from DB via id. Is NONE, if it doesn't exist
+
+    :param order_id: The order ID
+    :return: The order as a `OrderValue` object, none if it doesn't exist
+    """
+    entry: bytes = db.get(order_id)
+    return msgpack.decode(entry, type=OrderValue) if entry else None
+
 
 def create_order(user_id: str):
     key = str(uuid.uuid4())
