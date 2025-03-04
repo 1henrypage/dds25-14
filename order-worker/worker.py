@@ -8,15 +8,12 @@ from collections import defaultdict
 import redis
 import requests
 
-from aio_pika import Message, connect_robust
-from aio_pika.abc import AbstractIncomingMessage, DeliveryMode
-
 from msgspec import msgpack
 
 from common.msg_types import MsgType
 from common.queue_utils import consume_events
 from common.request_utils import create_response_message, create_error_message
-from common.redis_utils import configure_redis, get_from_db
+from common.redis_utils import configure_redis
 from model import OrderValue
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
@@ -24,12 +21,15 @@ GATEWAY_URL = os.environ['GATEWAY_URL']
 
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
-def get_order_from_db(order_id: str) ->  OrderValue | None:
-    return get_from_db(
-        db=db,
-        key=order_id,
-        value_type=OrderValue
-    )
+def get_order_from_db(order_id: str) -> OrderValue | None:
+    """
+    Gets an order from DB via id. Is NONE, if it doesn't exist
+
+    :param order_id: The order ID
+    :return: The order as a `OrderValue` object, none if it doesn't exist
+    """
+    entry: bytes = db.get(order_id)
+    return msgpack.decode(entry, type=OrderValue) if entry else None
 
 def create_order(user_id: str):
     key = str(uuid.uuid4())
@@ -44,7 +44,6 @@ def create_order(user_id: str):
     )
 
 def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
-
     n = int(n)
     n_items = int(n_items)
     n_users = int(n_users)
@@ -102,6 +101,7 @@ def add_item(order_id: str, item_id: str, quantity: int):
         return create_error_message(str(e))
     if order_entry is None:
         return create_error_message(f"Order: {order_id} not found")
+
     item_reply = requests.get(f"{GATEWAY_URL}/stock/find/{item_id}")
     if item_reply.status_code != 200:
         return create_error_message(

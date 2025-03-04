@@ -1,40 +1,20 @@
 import asyncio
-import logging
 import os
-import random
 import uuid
-import json
-from collections import defaultdict
-from typing import Optional
 
 import redis
-import requests
-
-from aio_pika import Message, connect_robust
-from aio_pika.abc import AbstractIncomingMessage, DeliveryMode
-
-from msgspec import msgpack
 
 from common.msg_types import MsgType
 from common.queue_utils import consume_events
 from common.request_utils import create_response_message, create_error_message
-from common.redis_utils import configure_redis, get_from_db
-from model import UserValue
+from common.redis_utils import configure_redis
 
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
-def get_user_from_db(user_id: str) -> UserValue | None:
-    return get_from_db(
-        db=db,
-        key=user_id,
-        value_type=UserValue
-    )
-
 def create_user():
-    key = str(uuid.uuid4())
-    value: bytes = msgpack.encode(UserValue(credit=0))
+    key: str = str(uuid.uuid4())
     try:
-        db.set(key, value)
+        db.set(key, 0)
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
     return create_response_message(
@@ -42,12 +22,10 @@ def create_user():
         is_json=True
     )
 
-
 def batch_init_users(n: int, starting_money: int):
     n = int(n)
     starting_money = int(starting_money)
-    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(UserValue(credit=starting_money))
-                                  for i in range(n)}
+    kv_pairs: dict[str, int] = {f"{i}": starting_money for i in range(n)}
     try:
         db.mset(kv_pairs)
     except redis.exceptions.RedisError as e:
@@ -57,67 +35,69 @@ def batch_init_users(n: int, starting_money: int):
         is_json=True
     )
 
-
 def find_user(user_id: str):
     try:
-        user_entry: UserValue = get_user_from_db(user_id)
+        credit = db.get(user_id)
+        if credit is None:
+            return create_error_message(f"User: {user_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-    if user_entry is None:
-        return create_error_message(f"User: {user_id} not found")
+    credit = int(credit)
 
     return create_response_message(
         content={
             "user_id": user_id,
-            "credit": user_entry.credit
+            "credit": credit
         },
         is_json=True
     )
 
 def add_credit(user_id: str, amount: int):
     try:
-        user_entry: UserValue = get_user_from_db(user_id)
+        if not db.exists(user_id):
+            return create_error_message(f"User: {user_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
-    if user_entry is None:
-        return create_error_message(f"User: {user_id} not found")
+
     # update credit, serialize and update database
-    user_entry.credit += int(amount)
     try:
-        db.set(user_id, msgpack.encode(user_entry))
+        new_balance = db.incrby(user_id,amount=amount)
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
+
     return create_response_message(
-        content=f"User: {user_id} credit updated to: {user_entry.credit}",
+        content=f"User: {user_id} credit updated to: {new_balance}",
         is_json=False
     )
 
 
 def remove_credit(user_id: str, amount: int):
     try:
-        user_entry: UserValue = get_user_from_db(user_id)
+        credit = db.get(user_id)
+        if credit is None:
+            return create_error_message(f"User: {user_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
-    if user_entry is None:
-        return create_error_message(f"User: {user_id} not found")
+
+    credit = int(credit)
 
     # update credit, serialize and update database
-    user_entry.credit -= int(amount)
-    if user_entry.credit < 0:
+    credit -= int(amount)
+
+    if credit < 0:
         return create_error_message(
             error=f"User: {user_id} credit cannot get reduced below zero!"
         )
     try:
-        db.set(user_id, msgpack.encode(user_entry))
+        db.set(user_id, credit)
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
     return create_response_message(
-        content=f"User: {user_id} credit updated to: {user_entry.credit}",
+        content=f"User: {user_id} credit updated to: {credit}",
         is_json=False
     )
-
 
 
 def process_message(message_type, content):

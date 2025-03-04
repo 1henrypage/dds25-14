@@ -1,32 +1,22 @@
-import asyncio
 import os
 import uuid
 
 import redis
-
-from msgspec import msgpack
+import asyncio
 
 from common.msg_types import MsgType
 from common.queue_utils import consume_events
-from common.redis_utils import configure_redis, get_from_db
+from common.redis_utils import configure_redis
 from common.request_utils import create_error_message, create_response_message
-
-from model import StockValue
 
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
-def get_item_from_db(item_id: str) -> StockValue | None:
-    return get_from_db(
-        db=db,
-        key=item_id,
-        value_type=StockValue
-    )
 
 def create_item(price: int):
     key = str(uuid.uuid4())
-    value = msgpack.encode(StockValue(stock=0, price=int(price)))
     try:
-        db.set(key, value)
+        db.set(key + "-stock", 0)
+        db.set(key + "-price", int(price))
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
     return create_response_message(
@@ -39,10 +29,14 @@ def batch_init_users(n: int, starting_stock: int, item_price: int):
     n = int(n)
     starting_stock = int(starting_stock)
     item_price = int(item_price)
-    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(StockValue(stock=starting_stock, price=item_price))
-                                  for i in range(n)}
+
+    # Create separate keys for stock and price for each user
+    price_kv_pairs: dict[str, int] = {f"user:{i}-price": item_price for i in range(n)}
+    stock_kv_pairs: dict[str, int] = {f"user:{i}-stock": starting_stock for i in range(n)}
+
     try:
-        db.mset(kv_pairs)
+        db.mset(price_kv_pairs)
+        db.mset(stock_kv_pairs)
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
@@ -53,61 +47,64 @@ def batch_init_users(n: int, starting_stock: int, item_price: int):
 
 def find_item(item_id: str):
     try:
-        item_entry: StockValue = get_item_from_db(item_id)
+        item_price = db.get(item_id + "-price")
+        item_stock = db.get(item_id + "-stock")
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
-    if item_entry is None:
+    if item_price is None or item_stock is None:
         return create_error_message(f"Item: {item_id} not found")
 
     return create_response_message(
         content={
-            "stock": item_entry.stock,
-            "price": item_entry.price
+            "stock": int(item_stock),
+            "price": int(item_price)
         },
         is_json=True
     )
 
 def add_stock(item_id: str, amount: int):
     try:
-        item_entry: StockValue = get_item_from_db(item_id)
+        if not db.exists(item_id + "-stock"):
+            return create_error_message(f"Item: {item_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
-    if item_entry is None:
-        return create_error_message(f"Item: {item_id} not found")
 
     # update stock, serialize and update database
-    item_entry.stock += int(amount)
     try:
-        db.set(item_id, msgpack.encode(item_entry))
+        new_stock = int(db.incrby(item_id + "-stock", amount=amount))
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
     return create_response_message(
-        content = f"Item: {item_id} stock updated to: {item_entry.stock}",
+        content = f"Item: {item_id} stock updated to: {new_stock}",
         is_json=False
     )
 
-
 def remove_stock(item_id: str, amount: int):
+    key = item_id + "-stock"
     try:
-        item_entry: StockValue = get_item_from_db(item_id)
+        item_stock = db.get(key)
+        if item_stock is None:
+            return create_error_message(f"Item: {item_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
-    if item_entry is None:
-        return create_error_message(f"Item: {item_id} not found")
+
+    item_stock = int(item_stock)
+
     # update stock, serialize and update database
-    item_entry.stock -= int(amount)
-    if item_entry.stock < 0:
+    item_stock -= int(amount)
+    if item_stock < 0:
         return create_error_message(
             error=f"Item: {item_id} stock cannot get reduced below zero!"
         )
+
     try:
-        db.set(item_id, msgpack.encode(item_entry))
-    except redis.exceptions.RedisError as e :
+        db.set(key, int(item_stock))
+    except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
     return create_response_message(
-        content=f"Item: {item_id} stock updated to: {item_entry.stock}",
+        content=f"Item: {item_id} stock updated to: {item_stock}",
         is_json=False
     )
 
