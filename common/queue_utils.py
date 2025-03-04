@@ -32,7 +32,7 @@ class RpcClient:
 
     async def on_response(self, message: AbstractIncomingMessage) -> None:
         if message.correlation_id is None:
-            print(f"Bad message {message!r}")
+            logging.error(f"Message doesn't have correlation ID: {message!r}")
             return
 
         future: asyncio.Future = self.futures.pop(message.correlation_id)
