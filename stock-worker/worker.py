@@ -4,6 +4,7 @@ import uuid
 import redis
 import asyncio
 
+from common.msg_types import MsgType
 from common.queue_utils import consume_events
 from common.redis_utils import configure_redis, get_from_db
 from common.request_utils import create_error_message, create_response_message
@@ -109,15 +110,22 @@ def remove_stock(item_id: str, amount: int):
 
 
 def process_message(message_type, content):
-    if message_type == "item":
+    """
+    Based on message type it delegates the call to a specific function.
+
+    :param message_type: The message type
+    :param content: The actual message content
+    :return: Processed response
+    """
+    if message_type == MsgType.CREATE:
         return create_item(price=content["price"])
-    elif message_type == "batch_init":
+    elif message_type == MsgType.BATCH_INIT:
         return batch_init_users(n=content["n"], starting_stock=content["starting_stock"], item_price=content["item_price"])
-    elif message_type == "find":
+    elif message_type == MsgType.FIND:
         return find_item(item_id=content["item_id"])
-    elif message_type == "add":
+    elif message_type == MsgType.ADD:
         return add_stock(item_id=content["item_id"], amount=content["amount"])
-    elif message_type == "subtract":
+    elif message_type == MsgType.SUBTRACT:
         return remove_stock(item_id=content["item_id"], amount=content["amount"])
 
     return create_error_message(error=f"Unknown message type: {message_type}")

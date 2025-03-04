@@ -4,6 +4,7 @@ import aio_pika
 import os
 import logging
 
+from common.msg_types import MsgType
 from common.request_utils import process_encoded_response_body
 from common.queue_utils import RpcClient
 
@@ -22,7 +23,7 @@ async def after_serving():
 
 @app.post('/create/<user_id>')
 async def create_order(user_id: str):
-    response = await rpc_client.call(msg={"user_id": user_id}, msg_type="create")
+    response = await rpc_client.call(msg={"user_id": user_id}, msg_type=MsgType.CREATE)
     return process_encoded_response_body(
         response=response,
     )
@@ -31,7 +32,7 @@ async def create_order(user_id: str):
 async def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
     response = await rpc_client.call(
         msg={"n": int(n), "n_items": int(n_items), "n_users": int(n_users), "item_price": int(item_price)},
-        msg_type="batch_init"
+        msg_type=MsgType.BATCH_INIT
     )
     return process_encoded_response_body(
         response=response,
@@ -39,7 +40,7 @@ async def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
 
 @app.get('/find/<order_id>')
 async def find_order(order_id: str):
-    response = await rpc_client.call(msg={"order_id": order_id}, msg_type="find")
+    response = await rpc_client.call(msg={"order_id": order_id}, msg_type=MsgType.FIND)
     return process_encoded_response_body(
         response=response,
     )
@@ -49,7 +50,7 @@ async def find_order(order_id: str):
 async def add_item(order_id: str, item_id: str, quantity: int):
     response = await rpc_client.call(
         msg={"order_id": order_id, "item_id": item_id, "quantity": int(quantity)},
-        msg_type="addItem"
+        msg_type=MsgType.ADD
     )
     return process_encoded_response_body(
         response=response,
@@ -58,7 +59,7 @@ async def add_item(order_id: str, item_id: str, quantity: int):
 
 @app.post('/checkout/<order_id>')
 async def checkout(order_id: str):
-    response = await rpc_client.call(msg={"order_id": order_id}, msg_type="checkout")
+    response = await rpc_client.call(msg={"order_id": order_id}, msg_type=MsgType.CHECKOUT)
     return process_encoded_response_body(
         response=response,
     )

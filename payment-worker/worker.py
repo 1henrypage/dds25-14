@@ -4,6 +4,7 @@ import uuid
 
 import redis
 
+from common.msg_types import MsgType
 from common.queue_utils import consume_events
 from common.request_utils import create_response_message, create_error_message
 from common.redis_utils import configure_redis, get_from_db
@@ -100,18 +101,25 @@ def remove_credit(user_id: str, amount: int):
 
 
 def process_message(message_type, content):
-    if message_type == 'create_user':
+    """
+    Based on message type it delegates the call to a specific function.
+
+    :param message_type: The message type
+    :param content: The actual message content
+    :return: Processed response
+    """
+    if message_type == MsgType.CREATE:
         return create_user()
-    elif message_type == 'batch_init':
+    elif message_type == MsgType.BATCH_INIT:
         return batch_init_users(
             n=content['n'],
             starting_money=content['starting_money']
         )
-    elif message_type == 'find_user':
+    elif message_type == MsgType.FIND:
         return find_user(user_id=content['user_id'])
-    elif message_type == 'add_funds':
+    elif message_type == MsgType.ADD:
         return add_credit(user_id=content['user_id'], amount=content['amount'])
-    elif message_type == 'pay':
+    elif message_type == MsgType.SUBTRACT:
         return remove_credit(user_id=content['user_id'], amount=content['amount'])
 
     return create_error_message(

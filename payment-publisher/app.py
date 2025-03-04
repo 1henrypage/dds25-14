@@ -4,6 +4,7 @@ import aio_pika
 import os
 import logging
 
+from common.msg_types import MsgType
 from common.request_utils import process_encoded_response_body
 from common.queue_utils import RpcClient
 
@@ -23,7 +24,7 @@ async def after_serving():
 
 @app.post('/create_user')
 async def create_user():
-    response = await rpc_client.call(msg={}, msg_type="create_user")
+    response = await rpc_client.call(msg={}, msg_type=MsgType.CREATE)
     return process_encoded_response_body(
         response=response
     )
@@ -33,7 +34,7 @@ async def create_user():
 async def batch_init_users(n: int, starting_money: int):
     response = await rpc_client.call(
         msg={"n": int(n), "starting_money": int(starting_money)},
-        msg_type="batch_init"
+        msg_type=MsgType.BATCH_INIT
     )
     return process_encoded_response_body(
         response=response,
@@ -42,7 +43,7 @@ async def batch_init_users(n: int, starting_money: int):
 
 @app.get('/find_user/<user_id>')
 async def find_user(user_id: str):
-    response = await rpc_client.call(msg={"user_id": user_id}, msg_type="find_user")
+    response = await rpc_client.call(msg={"user_id": user_id}, msg_type=MsgType.FIND)
     return process_encoded_response_body(
         response=response,
     )
@@ -52,7 +53,7 @@ async def find_user(user_id: str):
 async def add_credit(user_id: str, amount: int):
     response = await rpc_client.call(
         msg={"user_id": user_id, "amount": int(amount)},
-        msg_type="add_funds"
+        msg_type=MsgType.ADD
     )
     return process_encoded_response_body(
         response=response,
@@ -63,7 +64,7 @@ async def add_credit(user_id: str, amount: int):
 async def remove_credit(user_id: str, amount: int):
     response = await rpc_client.call(
         msg={"user_id": user_id, "amount": int(amount)},
-        msg_type="pay"
+        msg_type=MsgType.SUBTRACT
     )
     return process_encoded_response_body(
         response=response,
