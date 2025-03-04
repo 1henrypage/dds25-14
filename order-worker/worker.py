@@ -31,7 +31,6 @@ def get_order_from_db(order_id: str) -> OrderValue | None:
     entry: bytes = db.get(order_id)
     return msgpack.decode(entry, type=OrderValue) if entry else None
 
-
 def create_order(user_id: str):
     key = str(uuid.uuid4())
     value = msgpack.encode(OrderValue(paid=False, items=[], user_id=user_id, total_cost=0))
