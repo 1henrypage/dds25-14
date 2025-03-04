@@ -1,11 +1,8 @@
 
 import redis
 import atexit
-from typing import Type, TypeVar, Optional
 from msgspec import msgpack
-from functools import wraps
 
-T = TypeVar('T')
 
 def configure_redis(host: str, port: int = 6379) -> redis.RedisCluster:
     """
@@ -26,11 +23,4 @@ def configure_redis(host: str, port: int = 6379) -> redis.RedisCluster:
     atexit.register(lambda: db.close())
     return db
 
-def get_from_db(db: redis.RedisCluster, key: str, value_type: Type[T]) -> Optional[T]:
-    """
-    Gets a value from a redis cluster by key. DOES NO FAILURE HANDLING! ALL FAILURES HAVE TO BE HANDLED OUTSIDE!
-    """
-    entry: bytes = db.get(key)
-    entry: Optional[T] = msgpack.decode(entry, type=value_type) if entry else None
-    return entry
 
