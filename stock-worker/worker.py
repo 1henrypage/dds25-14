@@ -31,8 +31,8 @@ def batch_init_users(n: int, starting_stock: int, item_price: int):
     item_price = int(item_price)
 
     # Create separate keys for stock and price for each user
-    price_kv_pairs = {f"user:{i}-price": item_price for i in range(n)}
-    stock_kv_pairs = {f"user:{i}-stock": starting_stock for i in range(n)}
+    price_kv_pairs: dict[str, int] = {f"user:{i}-price": item_price for i in range(n)}
+    stock_kv_pairs: dict[str, int] = {f"user:{i}-stock": starting_stock for i in range(n)}
 
     try:
         db.mset(price_kv_pairs)
@@ -52,7 +52,7 @@ def find_item(item_id: str):
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
     if item_price is None or item_stock is None:
-        return create_error_message(f"Item {item_id} not found")
+        return create_error_message(f"Item: {item_id} not found")
 
     return create_response_message(
         content={
@@ -65,7 +65,7 @@ def find_item(item_id: str):
 def add_stock(item_id: str, amount: int):
     try:
         if not db.exists(item_id + "-stock"):
-            return create_error_message(f"Item {item_id} not found")
+            return create_error_message(f"Item: {item_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
@@ -83,28 +83,28 @@ def add_stock(item_id: str, amount: int):
 def remove_stock(item_id: str, amount: int):
     key = item_id + "-stock"
     try:
-        item_entry = db.get(key)
-        if item_entry is None:
-            return create_error_message(f"Item {item_id} not found")
+        item_stock = db.get(key)
+        if item_stock is None:
+            return create_error_message(f"Item: {item_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-    item_entry = int(item_entry)
+    item_stock = int(item_stock)
 
     # update stock, serialize and update database
-    item_entry -= int(amount)
-    if item_entry < 0:
+    item_stock -= int(amount)
+    if item_stock < 0:
         return create_error_message(
             error=f"Item: {item_id} stock cannot get reduced below zero!"
         )
 
     try:
-        db.set(key, int(item_entry))
+        db.set(key, int(item_stock))
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
     return create_response_message(
-        content=f"Item: {item_id} stock updated to: {item_entry}",
+        content=f"Item: {item_id} stock updated to: {item_stock}",
         is_json=False
     )
 

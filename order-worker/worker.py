@@ -21,7 +21,7 @@ GATEWAY_URL = os.environ['GATEWAY_URL']
 
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
-def get_order_from_db(order_id: str):
+def get_order_from_db(order_id: str) -> OrderValue | None:
     """
     Gets an order from DB via id. Is NONE, if it doesn't exist
 

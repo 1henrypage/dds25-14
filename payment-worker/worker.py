@@ -12,7 +12,7 @@ from common.redis_utils import configure_redis
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
 def create_user():
-    key = str(uuid.uuid4())
+    key: str = str(uuid.uuid4())
     try:
         db.set(key, 0)
     except redis.exceptions.RedisError as e:
@@ -37,18 +37,18 @@ def batch_init_users(n: int, starting_money: int):
 
 def find_user(user_id: str):
     try:
-        user_entry = db.get(user_id)
-        if user_entry is None:
+        credit = db.get(user_id)
+        if credit is None:
             return create_error_message(f"User: {user_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-    user_entry = int(user_entry)
+    credit = int(credit)
 
     return create_response_message(
         content={
             "user_id": user_id,
-            "credit": user_entry
+            "credit": credit
         },
         is_json=True
     )
@@ -74,28 +74,28 @@ def add_credit(user_id: str, amount: int):
 
 def remove_credit(user_id: str, amount: int):
     try:
-        user_entry= db.get(user_id)
-        if user_entry is None:
+        credit = db.get(user_id)
+        if credit is None:
             return create_error_message(f"User: {user_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-    user_entry = int(user_entry)
+    credit = int(credit)
 
     # update credit, serialize and update database
-    user_entry -= int(amount)
+    credit -= int(amount)
 
-    if user_entry < 0:
+    if credit < 0:
         return create_error_message(
             error=f"User: {user_id} credit cannot get reduced below zero!"
         )
     try:
-        db.set(user_id, user_entry)
+        db.set(user_id, credit)
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
     return create_response_message(
-        content=f"User: {user_id} credit updated to: {user_entry}",
+        content=f"User: {user_id} credit updated to: {credit}",
         is_json=False
     )
 
