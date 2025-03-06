@@ -7,9 +7,11 @@ from collections import defaultdict, Counter
 
 import redis
 import requests
+from flask import request
 
 from msgspec import msgpack
 
+from common.ForgetfulClient import ForgetfulClient
 from common.msg_types import MsgType
 from common.queue_utils import consume_events
 from common.request_utils import create_response_message, create_error_message
@@ -19,7 +21,7 @@ from orchestrator import SagaOrchestrator, SagaStep, Outcome
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
 
-
+forgetful_client = ForgetfulClient(rabbitmq_url=os.environ['RABBITMQ_URL'], routing_key=os.environ['ROUTE_KEY'])
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
 def get_order_from_db(order_id: str) -> OrderValue | None:
@@ -124,11 +126,20 @@ def add_item(order_id: str, item_id: str, quantity: int):
         is_json=False
     )
 
+
 def payment_step(order_entry):
-    user_reply = requests.post(f"{GATEWAY_URL}/payment/pay/{order_entry.user_id}/{order_entry.total_cost}")
-    if user_reply.status_code != 200:
-        return create_error_message(error = "User out of credit")
-    return create_response_message(content = "Payment successful", is_json=False)
+    asyncio.create_task(forgetful_client.call(msg={"user_id": order_entry.user_id, "amount": order_entry.total_cost}, msg_type=MsgType.SUBTRACT))
+    # user_reply = requests.post(f"{GATEWAY_URL}/payment/pay/{order_entry.user_id}/{order_entry.total_cost}")
+    # if user_reply.status_code != 200:
+    #     return create_error_message(error = "User out of credit")
+    # return create_response_message(content = "Payment successful", is_json=False)
+
+def rollback_payment(order_entry: OrderValue):
+    asyncio.create_task(forgetful_client.call(msg={"user_id": order_entry.user_id, "amount": order_entry.total_cost}, msg_type=MsgType.ADD))
+    # user_reply = requests.post(f"{GATEWAY_URL}/payment/add_funds/{order_entry.user_id}/{order_entry.total_cost}")
+    # if user_reply.status_code != 200:
+    #     return create_error_message(error="Error when rolling back payment")
+    # return create_response_message(content="Payment rollback successful", is_json=False)
 
 def payment_step_db(order_entry, order_id):
     order_entry.paid = True
@@ -146,25 +157,21 @@ def rollback_payment_db(order_entry, order_id):
         return create_error_message(str(e))
     return create_response_message(content = "Payment rollback db successful", is_json=False)
 
-def rollback_payment(order_entry: OrderValue):
-    user_reply = requests.post(f"{GATEWAY_URL}/payment/add_funds/{order_entry.user_id}/{order_entry.total_cost}")
-    if user_reply.status_code != 200:
-        return create_error_message(error="Error when rolling back payment")
-    return create_response_message(content="Payment rollback successful", is_json=False)
-
 def subtract_stock_step(order_entry: OrderValue):
-    stock_reply = requests.post(f"{GATEWAY_URL}/stock/subtract-bulk", json=Counter(dict(order_entry.items)))
-    if stock_reply.status_code != 200:
-        return create_error_message(f'Out of stock on item_id')  # TODO get item id that failed'
-    return create_response_message(content="Stock subtract successful", is_json=False)
+    asyncio.create_task(forgetful_client.call(msg=dict(Counter(dict(order_entry.items))), msg_type=MsgType.SUBTRACT_BULK))
+    # stock_reply = requests.post(f"{GATEWAY_URL}/stock/subtract-bulk", json=Counter(dict(order_entry.items)))
+    # if stock_reply.status_code != 200:
+    #     return create_error_message(f'Out of stock on item_id')  # TODO get item id that failed'
+    # return create_response_message(content="Stock subtract successful", is_json=False)
 
 def rollback_stock(order_entry: OrderValue):
-    stock_reply = requests.post(f"{GATEWAY_URL}/stock/add-bulk", json=Counter(dict(order_entry.items)))
-    if stock_reply.status_code != 200:
-        return create_error_message(error=f'Failed to rollback stock: {stock_reply}')
-    return create_response_message(content="Stock rollback successful", is_json=False)
+    asyncio.create_task(forgetful_client.call(msg=dict(Counter(dict(order_entry.items))), msg_type=MsgType.ADD_BULK))
+    # stock_reply = requests.post(f"{GATEWAY_URL}/stock/add-bulk", json=Counter(dict(order_entry.items)))
+    # if stock_reply.status_code != 200:
+    #     return create_error_message(error=f'Failed to rollback stock: {stock_reply}')
+    # return create_response_message(content="Stock rollback successful", is_json=False)
 
-def checkout(order_id: str):
+def checkout(order_id: str, request_id):
     """Orchestrates the checkout process using the Saga pattern."""
     try:
         order_entry: OrderValue = get_order_from_db(order_id)
@@ -176,7 +183,7 @@ def checkout(order_id: str):
     saga_steps = [
         SagaStep(name="Payment",
                  action=lambda: payment_step(order_entry),
-                 compensating_action=lambda: rollback_payment(order_entry)),
+                 compensating_action=rollback_payment(order_entry)),
         SagaStep(name="Payment-DB",
                  action=lambda: payment_step_db(order_entry, order_id),
                  compensating_action=lambda: rollback_payment_db(order_entry, order_id)),
@@ -185,13 +192,19 @@ def checkout(order_id: str):
                  compensating_action=lambda: rollback_stock(order_entry))
     ]
 
-    saga = SagaOrchestrator(steps=saga_steps)
-    result, res = saga.execute()
+    saga = SagaOrchestrator(request_id, saga_steps, redis_client=db, forgetful_client=forgetful_client)
+    saga.execute()
 
-    if result == Outcome.SUCCESS:
-        return create_response_message(content="Checkout successful", is_json=False)
-    else:
-        return res
+    # if result == Outcome.SUCCESS:
+    #     return create_response_message(content="Checkout successful", is_json=False)
+
+def checkout_reply(saga, content):
+    result, res = saga.handle_response(content)
+    if result == Outcome.FAILURE:
+        return create_error_message(error=res)
+    if result == Outcome.WAITING:
+
+    return create_response_message(content="Checkout successful", is_json=False)
 
 def process_message(message_type, content):
     """
@@ -210,12 +223,23 @@ def process_message(message_type, content):
     elif message_type == MsgType.ADD:
         return add_item(order_id=content['order_id'], item_id=content['item_id'], quantity=content['quantity'])
     elif message_type == MsgType.CHECKOUT:
-        return checkout(content['order_id'])
+        checkout(content['order_id'])
+    elif message_type == MsgType.CHECKOUT_REPLY:
+        # TODO: make orchestrator handle this with handle_response (technically it should be in the request which saga this is)
+        result, res = content['saga'].handle_response(content)
+        if result == Outcome.FAILURE:
+            return create_error_message(error=res)
+        elif result == Outcome.SUCCESS:
+            return create_response_message(content="Checkout successful", is_json=False)
+    else:
+        return create_error_message(
+            error = str(f"Unknown message type: {message_type}")
+        )
 
-    return create_error_message(
-        error = str(f"Unknown message type: {message_type}")
-    )
-
+async def main():
+    await forgetful_client.connect()
+    await consume_events(process_message=process_message)
+    await forgetful_client.close()
 
 if __name__ == "__main__":
-    asyncio.run(consume_events(process_message=process_message))
+    asyncio.run(main())

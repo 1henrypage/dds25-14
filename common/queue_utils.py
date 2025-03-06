@@ -133,6 +133,9 @@ async def consume_events(process_message: Callable[[str, Any], Any]) -> None:
                     message_body = msgpack.decode(message.body)
                     result = process_message(message_type, message_body)
 
+                    if MsgType(message_type) in [MsgType.CHECKOUT, MsgType.ADD_BULK, MsgType.SUBTRACT_BULK]:
+                        continue
+
                     await exchange.publish(
                         Message(
                             body=msgpack.encode(result),

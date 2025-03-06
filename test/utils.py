@@ -51,6 +51,14 @@ def add_credit_to_user(user_id: str, amount: float) -> int:
 ########################################################################################################################
 def create_order(user_id: str) -> dict:
     return requests.post(f"{ORDER_URL}/orders/create/{user_id}").json()
+    # response = requests.post(f"{ORDER_URL}/orders/create/{user_id}")
+    # print("Response Status Code:", response.status_code)
+    # print("Response Text:", response.text)  # Print raw response body to debug
+    # try:
+    #     response_json = response.json()
+    # except ValueError as e:
+    #     print("Failed to parse JSON:", e)
+
 
 def add_item_to_order(order_id: str, item_id: str, quantity: int) -> int:
     return requests.post(f"{ORDER_URL}/orders/addItem/{order_id}/{item_id}/{quantity}").status_code

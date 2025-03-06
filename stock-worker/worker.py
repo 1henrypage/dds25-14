@@ -4,13 +4,14 @@ import uuid
 import redis
 import asyncio
 
+from common.ForgetfulClient import ForgetfulClient
 from common.msg_types import MsgType
 from common.queue_utils import consume_events
 from common.redis_utils import configure_redis
 from common.request_utils import create_error_message, create_response_message
 
+forgetful_client = ForgetfulClient(rabbitmq_url=os.environ['RABBITMQ_URL'], routing_key=os.environ['ROUTE_KEY'])
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
-
 
 def create_item(price: int):
     key = str(uuid.uuid4())
@@ -109,6 +110,7 @@ def remove_stock(item_id: str, amount: int):
     )
 
 # TODO: make this faster? should be all or nothing
+# TODO: use queue
 def bulk_operation(items_amounts: dict[str, int], operation: callable, rollback_operation: callable, success_msg: str, error_msg: str):
     rollback_actions = []
     try:
@@ -117,7 +119,8 @@ def bulk_operation(items_amounts: dict[str, int], operation: callable, rollback_
             if res["status"] != 200:
                 raise Exception(error_msg)
             rollback_actions.append((item_id, amount))
-        return create_response_message(content={"msg": success_msg}, is_json=True)
+        res = create_response_message(content={"msg": success_msg}, is_json=True)
+        asyncio.create_task(forgetful_client.call(msg=res, msg_type=MsgType.CHECKOUT_REPLY))
     except Exception as e:
         for item_id, amount in rollback_actions:
             rollback_operation(item_id=item_id, amount=amount)
@@ -148,11 +151,16 @@ def process_message(message_type, content):
     elif message_type == MsgType.SUBTRACT:
         return remove_stock(item_id=content["item_id"], amount=content["amount"])
     elif message_type == MsgType.SUBTRACT_BULK:
-        return subtract_bulk(items_amounts=content["items_amounts"])
+        subtract_bulk(items_amounts=content["items_amounts"])
     elif message_type == MsgType.ADD_BULK:
-        return add_bulk(items_amounts=content["items_amounts"])
+        add_bulk(items_amounts=content["items_amounts"])
+    else:
+        return create_error_message(error=f"Unknown message type: {message_type}")
 
-    return create_error_message(error=f"Unknown message type: {message_type}")
+async def main():
+    await forgetful_client.connect()
+    await consume_events(process_message=process_message)
+    await forgetful_client.close()
 
 if __name__ == "__main__":
-    asyncio.run(consume_events(process_message))
+    asyncio.run(main())
