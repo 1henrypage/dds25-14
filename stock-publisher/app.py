@@ -60,6 +60,12 @@ async def remove_stock_bulk():
     response = await rpc_client.call(msg={"items_amounts": data}, msg_type=MsgType.SUBTRACT_BULK)
     return process_encoded_response_body(response=response)
 
+@app.post('/add-bulk')
+async def add_stock_bulk():
+    data = await request.get_json()
+    response = await rpc_client.call(msg={"items_amounts": data}, msg_type=MsgType.ADD_BULK)
+    return process_encoded_response_body(response=response)
+
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)

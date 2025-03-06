@@ -109,19 +109,25 @@ def remove_stock(item_id: str, amount: int):
     )
 
 # TODO: make this faster? should be all or nothing
-def subtract_bulk(items_amounts: dict[str, int]):
+def bulk_operation(items_amounts: dict[str, int], operation: callable, rollback_operation: callable, success_msg: str, error_msg: str):
     rollback_actions = []
     try:
         for item_id, amount in items_amounts.items():
-            remove_stock(item_id=item_id, amount=amount)
+            res = operation(item_id=item_id, amount=amount)
+            if res["status"] != 200:
+                raise Exception(error_msg)
             rollback_actions.append((item_id, amount))
-        return create_response_message(content={"msg": "Bulk subtract successful"}, is_json=True)
-
+        return create_response_message(content={"msg": success_msg}, is_json=True)
     except Exception as e:
         for item_id, amount in rollback_actions:
-            add_stock(item_id=item_id, amount=amount)
-        return create_response_message(content={"msg": f"Error: {str(e)}"}, is_json=True)
+            rollback_operation(item_id=item_id, amount=amount)
+        return create_error_message(str(e))
 
+def subtract_bulk(items_amounts: dict[str, int]):
+    return bulk_operation(items_amounts, remove_stock, add_stock, "Bulk subtract successful", "Error when bulk subtracting")
+
+def add_bulk(items_amounts: dict[str, int]):
+    return bulk_operation(items_amounts, add_stock, remove_stock, "Bulk add successful", "Error when bulk adding")
 
 def process_message(message_type, content):
     """
@@ -143,6 +149,8 @@ def process_message(message_type, content):
         return remove_stock(item_id=content["item_id"], amount=content["amount"])
     elif message_type == MsgType.SUBTRACT_BULK:
         return subtract_bulk(items_amounts=content["items_amounts"])
+    elif message_type == MsgType.ADD_BULK:
+        return add_bulk(items_amounts=content["items_amounts"])
 
     return create_error_message(error=f"Unknown message type: {message_type}")
 

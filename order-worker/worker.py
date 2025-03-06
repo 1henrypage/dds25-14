@@ -3,7 +3,7 @@ import logging
 import os
 import random
 import uuid
-from collections import defaultdict
+from collections import defaultdict, Counter
 
 import redis
 import requests
@@ -15,6 +15,7 @@ from common.queue_utils import consume_events
 from common.request_utils import create_response_message, create_error_message
 from common.redis_utils import configure_redis
 from model import OrderValue
+from orchestrator import SagaOrchestrator, SagaStep, Outcome
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
 
@@ -33,15 +34,16 @@ def get_order_from_db(order_id: str) -> OrderValue | None:
 
 def create_order(user_id: str):
     key = str(uuid.uuid4())
-    value = msgpack.encode(OrderValue(paid=False, items=[], user_id=user_id, total_cost=0))
+    order_value = OrderValue(paid=False, items=[], user_id=user_id, total_cost=0)
     try:
-        db.set(key, value)
+        db.set(key, msgpack.encode(order_value))
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
     return create_response_message(
         content = {'order_id': key},
         is_json=True
     )
+
 
 def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
     n = int(n)
@@ -122,53 +124,74 @@ def add_item(order_id: str, item_id: str, quantity: int):
         is_json=False
     )
 
-def rollback_stock(removed_items: list[tuple[str, int]]):
-    for item_id, quantity in removed_items:
-        requests.post(f"{GATEWAY_URL}/stock/add/{item_id}/{quantity}")
+def payment_step(order_entry):
+    user_reply = requests.post(f"{GATEWAY_URL}/payment/pay/{order_entry.user_id}/{order_entry.total_cost}")
+    if user_reply.status_code != 200:
+        return create_error_message(error = "User out of credit")
+    return create_response_message(content = "Payment successful", is_json=False)
+
+def payment_step_db(order_entry, order_id):
+    order_entry.paid = True
+    try:
+        db.set(order_id, msgpack.encode(order_entry))
+    except redis.exceptions.RedisError as e:
+        return create_error_message(str(e))
+    return create_response_message(content = "Payment db successful", is_json=False)
+
+def rollback_payment_db(order_entry, order_id):
+    order_entry.paid = False
+    try:
+        db.set(order_id, msgpack.encode(order_entry))
+    except redis.exceptions.RedisError as e:
+        return create_error_message(str(e))
+    return create_response_message(content = "Payment rollback db successful", is_json=False)
+
+def rollback_payment(order_entry: OrderValue):
+    user_reply = requests.post(f"{GATEWAY_URL}/payment/add_funds/{order_entry.user_id}/{order_entry.total_cost}")
+    if user_reply.status_code != 200:
+        return create_error_message(error="Error when rolling back payment")
+    return create_response_message(content="Payment rollback successful", is_json=False)
+
+def subtract_stock_step(order_entry: OrderValue):
+    stock_reply = requests.post(f"{GATEWAY_URL}/stock/subtract-bulk", json=Counter(dict(order_entry.items)))
+    if stock_reply.status_code != 200:
+        return create_error_message(f'Out of stock on item_id')  # TODO get item id that failed'
+    return create_response_message(content="Stock subtract successful", is_json=False)
+
+def rollback_stock(order_entry: OrderValue):
+    stock_reply = requests.post(f"{GATEWAY_URL}/stock/add-bulk", json=Counter(dict(order_entry.items)))
+    if stock_reply.status_code != 200:
+        return create_error_message(error=f'Failed to rollback stock: {stock_reply}')
+    return create_response_message(content="Stock rollback successful", is_json=False)
 
 def checkout(order_id: str):
+    """Orchestrates the checkout process using the Saga pattern."""
     try:
         order_entry: OrderValue = get_order_from_db(order_id)
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
     if order_entry is None:
         return create_error_message(f"Order: {order_id} not found")
-    # get the quantity per item
-    items_quantities: dict[str, int] = defaultdict(int)
-    for item_id, quantity in order_entry.items:
-        items_quantities[item_id] += quantity
-    # The removed items will contain the items that we already have successfully subtracted stock from
-    # for rollback purposes.
-    removed_items: list[tuple[str, int]] = []
-    for item_id, quantity in items_quantities.items():
-        stock_reply = requests.post(f"{GATEWAY_URL}/stock/subtract/{item_id}/{quantity}")
-        if stock_reply.status_code != 200:
-            # If one item does not have enough stock we need to rollback
-            rollback_stock(removed_items)
-            return create_error_message(
-                error = f'Out of stock on item_id: {item_id}'
-            )
-        removed_items.append((item_id, quantity))
-    user_reply = requests.post(f"{GATEWAY_URL}/payment/pay/{order_entry.user_id}/{order_entry.total_cost}")
-    if user_reply.status_code != 200:
-        # If the user does not have enough credit we need to rollback all the item stock subtractions
-        rollback_stock(removed_items)
-        return create_error_message(
-            error = "User out of credit"
-        )
-    order_entry.paid = True
-    try:
-        db.set(order_id, msgpack.encode(order_entry)) # TODO: use WATCH
-    except redis.exceptions.RedisError as e:
-        return create_error_message(
-            error = str(e)
-        )
 
-    return create_response_message(
-        content = "Checkout successful",
-        is_json=False
-    )
+    saga_steps = [
+        SagaStep(name="Payment",
+                 action=lambda: payment_step(order_entry),
+                 compensating_action=lambda: rollback_payment(order_entry)),
+        SagaStep(name="Payment-DB",
+                 action=lambda: payment_step_db(order_entry, order_id),
+                 compensating_action=lambda: rollback_payment_db(order_entry, order_id)),
+        SagaStep(name="Stock",
+                 action=lambda: subtract_stock_step(order_entry),
+                 compensating_action=lambda: rollback_stock(order_entry))
+    ]
 
+    saga = SagaOrchestrator(steps=saga_steps)
+    result, res = saga.execute()
+
+    if result == Outcome.SUCCESS:
+        return create_response_message(content="Checkout successful", is_json=False)
+    else:
+        return res
 
 def process_message(message_type, content):
     """
