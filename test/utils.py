@@ -21,6 +21,9 @@ def add_stock(item_id: str, amount: int) -> int:
 def subtract_stock(item_id: str, amount: int) -> int:
     return requests.post(f"{STOCK_URL}/stock/subtract/{item_id}/{amount}").status_code
 
+def subtract_stock_bulk(items_amounts: dict[str, int]) -> int:
+    return requests.post(f"{STOCK_URL}/stock/subtract-bulk", json=items_amounts).status_code
+
 
 ########################################################################################################################
 #   PAYMENT MICROSERVICE FUNCTIONS
@@ -45,7 +48,14 @@ def add_credit_to_user(user_id: str, amount: float) -> int:
 #   ORDER MICROSERVICE FUNCTIONS
 ########################################################################################################################
 def create_order(user_id: str) -> dict:
-    return requests.post(f"{ORDER_URL}/orders/create/{user_id}").json()
+    # return requests.post(f"{ORDER_URL}/orders/create/{user_id}").json()
+    response = requests.post(f"{ORDER_URL}/orders/create/{user_id}")
+    print("Response Status Code:", response.status_code)
+    print("Response Text:", response.text)  # Print raw response body to debug
+    try:
+        response_json = response.json()
+    except ValueError as e:
+        print("Failed to parse JSON:", e)
 
 
 def add_item_to_order(order_id: str, item_id: str, quantity: int) -> int:

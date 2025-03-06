@@ -111,7 +111,7 @@ def add_item(order_id: str, item_id: str, quantity: int):
     order_entry.items.append((item_id, int(quantity)))
     order_entry.total_cost += int(quantity) * item_json["price"]
     try:
-        db.set(order_id, msgpack.encode(order_entry))
+        db.set(order_id, msgpack.encode(order_entry)) # TODO: use WATCH
     except redis.exceptions.RedisError as e:
         return create_error_message(
             error = str(e)
@@ -158,7 +158,7 @@ def checkout(order_id: str):
         )
     order_entry.paid = True
     try:
-        db.set(order_id, msgpack.encode(order_entry))
+        db.set(order_id, msgpack.encode(order_entry)) # TODO: use WATCH
     except redis.exceptions.RedisError as e:
         return create_error_message(
             error = str(e)

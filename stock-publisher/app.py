@@ -49,10 +49,15 @@ async def add_stock(item_id: str, amount: int):
     response = await rpc_client.call(msg={"item_id": item_id, "amount": amount}, msg_type=MsgType.ADD)
     return process_encoded_response_body(response=response)
 
-
 @app.post('/subtract/<item_id>/<amount>')
 async def remove_stock(item_id: str, amount: int):
     response = await rpc_client.call(msg={"item_id": item_id, "amount": amount}, msg_type=MsgType.SUBTRACT)
+    return process_encoded_response_body(response=response)
+
+@app.post('/subtract-bulk')
+async def remove_stock_bulk():
+    data = await request.get_json()
+    response = await rpc_client.call(msg={"items_amounts": data}, msg_type=MsgType.SUBTRACT_BULK)
     return process_encoded_response_body(response=response)
 
 

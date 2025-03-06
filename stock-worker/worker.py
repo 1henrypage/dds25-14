@@ -99,7 +99,7 @@ def remove_stock(item_id: str, amount: int):
         )
 
     try:
-        db.set(key, int(item_stock))
+        db.set(key, int(item_stock)) # TODO: Use WATCH
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
@@ -107,6 +107,20 @@ def remove_stock(item_id: str, amount: int):
         content=f"Item: {item_id} stock updated to: {item_stock}",
         is_json=False
     )
+
+# TODO: make this faster? should be all or nothing
+def subtract_bulk(items_amounts: dict[str, int]):
+    rollback_actions = []
+    try:
+        for item_id, amount in items_amounts.items():
+            remove_stock(item_id=item_id, amount=amount)
+            rollback_actions.append((item_id, amount))
+        return create_response_message(content={"msg": "Bulk subtract successful"}, is_json=True)
+
+    except Exception as e:
+        for item_id, amount in rollback_actions:
+            add_stock(item_id=item_id, amount=amount)
+        return create_response_message(content={"msg": f"Error: {str(e)}"}, is_json=True)
 
 
 def process_message(message_type, content):
@@ -127,6 +141,8 @@ def process_message(message_type, content):
         return add_stock(item_id=content["item_id"], amount=content["amount"])
     elif message_type == MsgType.SUBTRACT:
         return remove_stock(item_id=content["item_id"], amount=content["amount"])
+    elif message_type == MsgType.SUBTRACT_BULK:
+        return subtract_bulk(items_amounts=content["items_amounts"])
 
     return create_error_message(error=f"Unknown message type: {message_type}")
 

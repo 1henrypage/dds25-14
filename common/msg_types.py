@@ -11,6 +11,7 @@ class MsgType(str, Enum):
     ADD = "AD"
     SUBTRACT = "ST"
     CHECKOUT = "CO"
+    SUBTRACT_BULK = "SB"
 
     def __str__(self):
         return self.value
