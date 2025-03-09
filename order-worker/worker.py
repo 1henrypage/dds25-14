@@ -1,4 +1,5 @@
 import asyncio
+import time
 import logging
 import os
 import random
@@ -7,19 +8,21 @@ from collections import defaultdict
 
 import redis
 import requests
+from aio_pika.abc import AbstractIncomingMessage
 
 from msgspec import msgpack
 
 from common.msg_types import MsgType
-from common.queue_utils import consume_events
+from common.queue_utils import consume_events, OrderWorkerClient
 from common.request_utils import create_response_message, create_error_message
-from common.redis_utils import configure_redis
+from common.redis_utils import configure_redis, acquire_locks, release_locks
 from model import OrderValue
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
-
-
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
+order_worker_client: OrderWorkerClient = None
+
+SAGA_TIMEOUT = 30
 
 def get_order_from_db(order_id: str) -> OrderValue | None:
     """
@@ -93,8 +96,7 @@ def find_order(order_id: str):
     )
 
 
-
-def add_item(order_id: str, item_id: str, quantity: int):
+async def add_item(order_id: str, item_id: str, quantity: int):
     try:
         order_entry: OrderValue = get_order_from_db(order_id)
     except redis.exceptions.RedisError as e:
@@ -122,62 +124,156 @@ def add_item(order_id: str, item_id: str, quantity: int):
         is_json=False
     )
 
-def rollback_stock(removed_items: list[tuple[str, int]]):
-    for item_id, quantity in removed_items:
-        requests.post(f"{GATEWAY_URL}/stock/add/{item_id}/{quantity}")
 
-def checkout(order_id: str):
+async def checkout(order_id: str, correlation_id: str, reply_to: str):
     try:
         order_entry: OrderValue = get_order_from_db(order_id)
+        if order_entry is None:
+            return create_error_message(f"Order: {order_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
-    if order_entry is None:
-        return create_error_message(f"Order: {order_id} not found")
-    # get the quantity per item
+
     items_quantities: dict[str, int] = defaultdict(int)
     for item_id, quantity in order_entry.items:
         items_quantities[item_id] += quantity
-    # The removed items will contain the items that we already have successfully subtracted stock from
-    # for rollback purposes.
-    removed_items: list[tuple[str, int]] = []
-    for item_id, quantity in items_quantities.items():
-        stock_reply = requests.post(f"{GATEWAY_URL}/stock/subtract/{item_id}/{quantity}")
-        if stock_reply.status_code != 200:
-            # If one item does not have enough stock we need to rollback
-            rollback_stock(removed_items)
-            return create_error_message(
-                error = f'Out of stock on item_id: {item_id}'
-            )
-        removed_items.append((item_id, quantity))
-    user_reply = requests.post(f"{GATEWAY_URL}/payment/pay/{order_entry.user_id}/{order_entry.total_cost}")
-    if user_reply.status_code != 200:
-        # If the user does not have enough credit we need to rollback all the item stock subtractions
-        rollback_stock(removed_items)
-        return create_error_message(
-            error = "User out of credit"
-        )
-    order_entry.paid = True
-    try:
-        db.set(order_id, msgpack.encode(order_entry))
-    except redis.exceptions.RedisError as e:
-        return create_error_message(
-            error = str(e)
-        )
 
-    return create_response_message(
-        content = "Checkout successful",
-        is_json=False
+    call_msg = {
+        'item_dict': items_quantities,
+        'amount': order_entry.total_cost,
+        'user_id': order_entry.user_id
+    }
+
+    saga_key = f"saga-{correlation_id}"
+    db.hsetnx(saga_key, 'order_id', order_id)
+    db.hsetnx(saga_key, 'reply_to', reply_to)
+
+
+
+
+
+    await order_worker_client.order_fanout_call(
+        msg=call_msg,
+        msg_type=MsgType.SAGA_INIT,
+        correlation_id=correlation_id,
+        reply_to=os.environ['ROUTE_KEY']
     )
 
+    return None
 
-def process_message(message_type, content):
-    """
-    Based on message type it delegates the call to a specific function.
 
-    :param message_type: The message type
-    :param content: The actual message content
-    :return: Processed response
-    """
+
+async def saga_processing(correlation_id: str, stock_status: int, payment_status: int, order_id: str):
+    try:
+        logging.error(f" order id: {order_id}")
+        order_entry = get_order_from_db(order_id)
+        if order_entry is None:
+            logging.error("WHY THE FUCK ARE WE GOING HERE?!??!?!??!?!?!!")
+            return create_error_message(f"Order for saga confirmation: {order_id} not found")
+
+
+        if payment_status == 1 and stock_status == 1:
+            # Both payment and stock successful, complete order
+
+            order_entry.paid = True
+
+            try:
+                db.set(order_id, msgpack.encode(order_entry))  # Store the updated order entry
+            except redis.exceptions.RedisError as e:
+
+                return create_error_message(error=str(e))
+
+
+            return create_response_message(
+                content="Checkout successful!",
+                is_json=False
+            )
+        elif payment_status == 1:
+            # Payment successful but stock failed, reverse payment
+            await order_worker_client.order_fanout_call(
+                msg={"item_dict": order_entry.items, "amount": order_entry.total_cost, "user_id": order_entry.user_id},
+                msg_type=MsgType.SAGA_PAYMENT_REVERSE,
+                correlation_id=correlation_id,
+                reply_to=None
+            )
+            return create_error_message(error="Stock service failed in the SAGA, payment reversed.")
+
+
+        elif stock_status == 1:
+            # Stock successful but payment failed, reverse stock
+            logging.error("IMPORTANT CHECKPOINT")
+            items_quantities: dict[str, int] = defaultdict(int)
+            for item_id, quantity in order_entry.items:
+                items_quantities[item_id] += quantity
+
+            await order_worker_client.order_fanout_call(
+                msg={"item_dict": items_quantities, "amount": order_entry.total_cost, "user_id": order_entry.user_id},
+                msg_type=MsgType.SAGA_STOCK_REVERSE,
+                correlation_id=correlation_id,
+                reply_to=None
+            )
+            return create_error_message(error="Payment service failed in the SAGA, stock reversed.")
+
+        # If neither payment nor stock are successful, handle failure
+        return create_error_message(error="Both payment and stock services failed in the SAGA.")
+
+    except Exception as e:
+        return create_error_message(error=str(e))
+
+
+async def check_saga_completion(correlation_id):
+    MAX_RETRIES = 5
+    RETRY_DELAY=0.2
+    """Check if both payment and stock responses are available atomically using a single lock with retries."""
+    # Lock key for the saga correlation ID
+    lock_key = f"saga-{correlation_id}"
+
+    # Retry logic for acquiring the lock
+    for attempt in range(MAX_RETRIES):
+        lock = acquire_locks(db, [lock_key])
+        if lock is not None:
+            # Lock acquired successfully, proceed with checking saga
+            try:
+                # Now that we have acquired the lock, check the status in the hash
+                result = db.hgetall(f"saga-{correlation_id}")
+
+                # Check if both payment and stock responses are available
+                if result and b"payment" in result and b"stock" in result:
+                    payment_status = int(result[b"payment"])
+                    stock_status = int(result[b"stock"])
+                    order_id = result[b"order_id"].decode("utf-8")
+                    processing_result = await saga_processing(
+                        correlation_id=correlation_id,
+                        stock_status=stock_status,
+                        payment_status=payment_status,
+                        order_id=order_id,
+                    )
+
+                    return processing_result
+
+                return None  # Both statuses are not available yet
+            finally:
+                # Release the lock after processing
+                release_locks(db, [lock_key])
+
+        # If lock is not acquired, wait before retrying
+        await asyncio.sleep(RETRY_DELAY)
+
+    # If lock could not be acquired after max_retries, return None
+    return None
+
+
+async def handle_payment_saga_response(status_code, correlation_id):
+    db.hsetnx(f"saga-{correlation_id}", "payment", "1" if status_code == 200 else "0")
+    return await check_saga_completion(correlation_id)
+
+async def handle_stock_saga_response(status_code, correlation_id):
+    db.hsetnx(f"saga-{correlation_id}", "stock", "1" if status_code == 200 else "0")
+    return await check_saga_completion(correlation_id)
+
+async def process_message(message: AbstractIncomingMessage):
+    message_type = message.type
+    content = msgpack.decode(message.body)
+
     if message_type == MsgType.CREATE:
         return create_order(user_id=content['user_id'])
     elif message_type == MsgType.BATCH_INIT:
@@ -185,14 +281,42 @@ def process_message(message_type, content):
     elif message_type == MsgType.FIND:
         return find_order(order_id=content['order_id'])
     elif message_type == MsgType.ADD:
-        return add_item(order_id=content['order_id'], item_id=content['item_id'], quantity=content['quantity'])
+        return await add_item(order_id=content['order_id'], item_id=content['item_id'], quantity=content['quantity'])
     elif message_type == MsgType.CHECKOUT:
-        return checkout(content['order_id'])
+        return await checkout(content['order_id'], message.correlation_id, reply_to=message.reply_to)
+    elif message_type == MsgType.SAGA_PAYMENT_RESPONSE:
+        return await handle_payment_saga_response(status_code=content['status'], correlation_id=message.correlation_id)
+    elif message_type == MsgType.SAGA_STOCK_RESPONSE:
+        return await handle_stock_saga_response(status_code=content['status'], correlation_id=message.correlation_id)
 
     return create_error_message(
         error = str(f"Unknown message type: {message_type}")
     )
 
+def get_custom_reply_to(message: AbstractIncomingMessage) -> str:
+    if message.type in (MsgType.SAGA_STOCK_RESPONSE, MsgType.SAGA_PAYMENT_RESPONSE):
+        reply_to = db.hget(f"saga-{message.correlation_id}", 'reply_to')
+        reply_to = reply_to.decode('utf-8') if reply_to else None
+        return reply_to
+
+    return None
+
+async def main():
+    global order_worker_client
+    order_worker_client = await OrderWorkerClient(
+        rabbitmq_url=os.environ['RABBITMQ_URL'],
+        exchange_key=os.environ['ORDER_OUTBOUND_EXCHANGE_IDENTIFIER']
+    ).connect()
+
+
+    await consume_events(
+        process_message=process_message,
+        get_message_response_type=lambda message: None,
+        get_custom_reply_to=get_custom_reply_to
+    )
 
 if __name__ == "__main__":
-    asyncio.run(consume_events(process_message=process_message))
+    asyncio.run(main())
+
+
+

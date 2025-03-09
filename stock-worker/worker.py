@@ -3,10 +3,15 @@ import uuid
 
 import redis
 import asyncio
+import logging
+
+from aio_pika.abc import AbstractIncomingMessage
+from msgspec import msgpack
 
 from common.msg_types import MsgType
+import time
 from common.queue_utils import consume_events
-from common.redis_utils import configure_redis
+from common.redis_utils import configure_redis, acquire_locks, release_locks
 from common.request_utils import create_error_message, create_response_message
 
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
@@ -108,15 +113,76 @@ def remove_stock(item_id: str, amount: int):
         is_json=False
     )
 
+def remove_stock_for_saga(item_dict: dict[str, int]):
+    """Attempts to decrement stock safely while locking only relevant keys."""
+    stock_keys = [f"{item_id}-stock" for item_id in item_dict.keys()]
 
-def process_message(message_type, content):
-    """
-    Based on message type it delegates the call to a specific function.
+    # TODO RETRY LOGIC MAKE MORE CLEVER
+    MAX_RETRIES = 3
+    RETRY_DELAY = 0.1
 
-    :param message_type: The message type
-    :param content: The actual message content
-    :return: Processed response
-    """
+    for attempt in range(MAX_RETRIES):
+        acquired_locks = acquire_locks(db, stock_keys)
+        if not acquired_locks:
+            time.sleep(RETRY_DELAY)
+            continue  # Retry acquiring locks
+
+        try:
+            # Fetch current stock levels and check availability
+            for item_id, amount in item_dict.items():
+                stock_key = f"{item_id}-stock"
+                current_stock = db.get(stock_key)
+
+                # If stock is unavailable or insufficient, rollback
+                if current_stock is None or int(current_stock) < amount:
+                    # Rollback by releasing locks and returning error
+                    return create_error_message("Not enough stock for one or more items")
+
+
+            pipeline = db.pipeline()
+            for item_id, amount in item_dict.items():
+                pipeline.decrby(f"{item_id}-stock", amount)
+
+            pipeline.execute()
+
+
+            return create_response_message(
+                content="All items' stock successfully updated for the saga.",
+                is_json=False
+            )
+
+        except redis.exceptions.RedisError as e:
+            return create_error_message(f"Redis error: {str(e)}")
+
+        finally:
+            release_locks(db, acquired_locks)
+
+    return create_error_message("Failed to acquire necessary locks after multiple retries")
+
+def reverse_stock_for_saga(item_dict: dict[str, int]):
+    try:
+        # Use a pipeline to send multiple INCRBY commands in a batch
+        with db.pipeline() as pipe:
+            for item_id, amount in item_dict.items():
+                key = item_id + "-stock"
+                pipe.incrby(key, amount)
+
+            # Execute the batch commands
+            pipe.execute()
+
+        return create_response_message(
+            content="Stock successfully restored for the saga reversal.",
+            is_json=False
+        )
+
+    except redis.exceptions.RedisError as e:
+        return create_error_message(str(e))
+
+
+async def process_message(message: AbstractIncomingMessage):
+    message_type = message.type
+    content = msgpack.decode(message.body)
+
     if message_type == MsgType.CREATE:
         return create_item(price=content["price"])
     elif message_type == MsgType.BATCH_INIT:
@@ -127,8 +193,26 @@ def process_message(message_type, content):
         return add_stock(item_id=content["item_id"], amount=content["amount"])
     elif message_type == MsgType.SUBTRACT:
         return remove_stock(item_id=content["item_id"], amount=content["amount"])
+    elif message_type == MsgType.SAGA_INIT:
+        return remove_stock_for_saga(item_dict=content["item_dict"])
+    elif message_type == MsgType.SAGA_STOCK_REVERSE:
+        logging.error("SAGA REVERSAL INCOMING ON STOCK ")
+        return reverse_stock_for_saga(item_dict=content["item_dict"])
+    elif message_type == MsgType.SAGA_PAYMENT_REVERSE:
+        return None # Ignore
 
     return create_error_message(error=f"Unknown message type: {message_type}")
 
+
+def get_message_response_type(message: AbstractIncomingMessage) -> str:
+    if message.type == MsgType.SAGA_INIT:
+        return MsgType.SAGA_STOCK_RESPONSE
+
+    return None
+
 if __name__ == "__main__":
-    asyncio.run(consume_events(process_message))
+    asyncio.run(consume_events(
+        process_message=process_message,
+        get_message_response_type=get_message_response_type,
+        get_custom_reply_to=lambda message: None
+    ))

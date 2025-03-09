@@ -3,6 +3,9 @@ import os
 import uuid
 
 import redis
+import logging
+from aio_pika.abc import AbstractIncomingMessage
+from msgspec import msgpack
 
 from common.msg_types import MsgType
 from common.queue_utils import consume_events
@@ -100,14 +103,10 @@ def remove_credit(user_id: str, amount: int):
     )
 
 
-def process_message(message_type, content):
-    """
-    Based on message type it delegates the call to a specific function.
+async def process_message(message: AbstractIncomingMessage):
+    message_type = message.type
+    content = msgpack.decode(message.body)
 
-    :param message_type: The message type
-    :param content: The actual message content
-    :return: Processed response
-    """
     if message_type == MsgType.CREATE:
         return create_user()
     elif message_type == MsgType.BATCH_INIT:
@@ -117,16 +116,27 @@ def process_message(message_type, content):
         )
     elif message_type == MsgType.FIND:
         return find_user(user_id=content['user_id'])
-    elif message_type == MsgType.ADD:
+    elif message_type in (MsgType.ADD, MsgType.SAGA_PAYMENT_REVERSE):
         return add_credit(user_id=content['user_id'], amount=content['amount'])
-    elif message_type == MsgType.SUBTRACT:
+    elif message_type in (MsgType.SUBTRACT, MsgType.SAGA_INIT):
         return remove_credit(user_id=content['user_id'], amount=content['amount'])
+
+    elif message_type == MsgType.SAGA_STOCK_REVERSE:
+        return None # Ignore
 
     return create_error_message(
         error=f"Unknown message type: {message_type}"
     )
 
+def get_message_response_type(message: AbstractIncomingMessage) -> str:
+    if message.type == MsgType.SAGA_INIT:
+        return MsgType.SAGA_PAYMENT_RESPONSE
 
+    return None
 
 if __name__ == "__main__":
-    asyncio.run(consume_events(process_message))
+    asyncio.run(consume_events(
+        process_message=process_message,
+        get_message_response_type=get_message_response_type,
+        get_custom_reply_to=lambda message: None
+    ))
