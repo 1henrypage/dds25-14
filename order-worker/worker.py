@@ -5,10 +5,11 @@ import os
 import random
 import uuid
 from collections import defaultdict
-
+from saga import check_saga_completion
 import redis
 import requests
 from aio_pika.abc import AbstractIncomingMessage
+import aiohttp
 
 from msgspec import msgpack
 
@@ -104,12 +105,14 @@ async def add_item(order_id: str, item_id: str, quantity: int):
     if order_entry is None:
         return create_error_message(f"Order: {order_id} not found")
 
-    item_reply = requests.get(f"{GATEWAY_URL}/stock/find/{item_id}")
-    if item_reply.status_code != 200:
-        return create_error_message(
-            error = str(f"Item: {item_id} does not exist!")
-        )
-    item_json: dict = item_reply.json()
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{GATEWAY_URL}/stock/find/{item_id}") as item_reply:
+            if item_reply.status != 200:
+                return create_error_message(
+                    error=f"Item: {item_id} does not exist!"
+                )
+            item_json: dict = await item_reply.json()
+
     order_entry.items.append((item_id, int(quantity)))
     order_entry.total_cost += int(quantity) * item_json["price"]
     try:
@@ -147,10 +150,6 @@ async def checkout(order_id: str, correlation_id: str, reply_to: str):
     db.hsetnx(saga_key, 'order_id', order_id)
     db.hsetnx(saga_key, 'reply_to', reply_to)
 
-
-
-
-
     await order_worker_client.order_fanout_call(
         msg=call_msg,
         msg_type=MsgType.SAGA_INIT,
@@ -160,115 +159,13 @@ async def checkout(order_id: str, correlation_id: str, reply_to: str):
 
     return None
 
-
-
-async def saga_processing(correlation_id: str, stock_status: int, payment_status: int, order_id: str):
-    try:
-        logging.error(f" order id: {order_id}")
-        order_entry = get_order_from_db(order_id)
-        if order_entry is None:
-            logging.error("WHY THE FUCK ARE WE GOING HERE?!??!?!??!?!?!!")
-            return create_error_message(f"Order for saga confirmation: {order_id} not found")
-
-
-        if payment_status == 1 and stock_status == 1:
-            # Both payment and stock successful, complete order
-
-            order_entry.paid = True
-
-            try:
-                db.set(order_id, msgpack.encode(order_entry))  # Store the updated order entry
-            except redis.exceptions.RedisError as e:
-
-                return create_error_message(error=str(e))
-
-
-            return create_response_message(
-                content="Checkout successful!",
-                is_json=False
-            )
-        elif payment_status == 1:
-            # Payment successful but stock failed, reverse payment
-            await order_worker_client.order_fanout_call(
-                msg={"item_dict": order_entry.items, "amount": order_entry.total_cost, "user_id": order_entry.user_id},
-                msg_type=MsgType.SAGA_PAYMENT_REVERSE,
-                correlation_id=correlation_id,
-                reply_to=None
-            )
-            return create_error_message(error="Stock service failed in the SAGA, payment reversed.")
-
-
-        elif stock_status == 1:
-            # Stock successful but payment failed, reverse stock
-            logging.error("IMPORTANT CHECKPOINT")
-            items_quantities: dict[str, int] = defaultdict(int)
-            for item_id, quantity in order_entry.items:
-                items_quantities[item_id] += quantity
-
-            await order_worker_client.order_fanout_call(
-                msg={"item_dict": items_quantities, "amount": order_entry.total_cost, "user_id": order_entry.user_id},
-                msg_type=MsgType.SAGA_STOCK_REVERSE,
-                correlation_id=correlation_id,
-                reply_to=None
-            )
-            return create_error_message(error="Payment service failed in the SAGA, stock reversed.")
-
-        # If neither payment nor stock are successful, handle failure
-        return create_error_message(error="Both payment and stock services failed in the SAGA.")
-
-    except Exception as e:
-        return create_error_message(error=str(e))
-
-
-async def check_saga_completion(correlation_id):
-    MAX_RETRIES = 5
-    RETRY_DELAY=0.2
-    """Check if both payment and stock responses are available atomically using a single lock with retries."""
-    # Lock key for the saga correlation ID
-    lock_key = f"saga-{correlation_id}"
-
-    # Retry logic for acquiring the lock
-    for attempt in range(MAX_RETRIES):
-        lock = acquire_locks(db, [lock_key])
-        if lock is not None:
-            # Lock acquired successfully, proceed with checking saga
-            try:
-                # Now that we have acquired the lock, check the status in the hash
-                result = db.hgetall(f"saga-{correlation_id}")
-
-                # Check if both payment and stock responses are available
-                if result and b"payment" in result and b"stock" in result:
-                    payment_status = int(result[b"payment"])
-                    stock_status = int(result[b"stock"])
-                    order_id = result[b"order_id"].decode("utf-8")
-                    processing_result = await saga_processing(
-                        correlation_id=correlation_id,
-                        stock_status=stock_status,
-                        payment_status=payment_status,
-                        order_id=order_id,
-                    )
-
-                    return processing_result
-
-                return None  # Both statuses are not available yet
-            finally:
-                # Release the lock after processing
-                release_locks(db, [lock_key])
-
-        # If lock is not acquired, wait before retrying
-        await asyncio.sleep(RETRY_DELAY)
-
-    # If lock could not be acquired after max_retries, return None
-    return None
-
-
 async def handle_payment_saga_response(status_code, correlation_id):
     db.hsetnx(f"saga-{correlation_id}", "payment", "1" if status_code == 200 else "0")
-    return await check_saga_completion(correlation_id)
+    return await check_saga_completion(db, order_worker_client, correlation_id)
 
 async def handle_stock_saga_response(status_code, correlation_id):
     db.hsetnx(f"saga-{correlation_id}", "stock", "1" if status_code == 200 else "0")
-    return await check_saga_completion(correlation_id)
+    return await check_saga_completion(db, order_worker_client, correlation_id)
 
 async def process_message(message: AbstractIncomingMessage):
     message_type = message.type

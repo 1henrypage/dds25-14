@@ -6,4 +6,4 @@ setuptools==75.8.1
 Quart==0.20.0
 aio-pika==9.5.4
 Hypercorn==0.17.3
-
+aiohttp~=3.11.10

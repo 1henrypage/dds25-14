@@ -5,6 +5,53 @@ import utils as tu
 
 class TestMicroservices(unittest.TestCase):
 
+    def test_subtract_bulk(self):
+        # Test /stock/subtract-bulk
+        item1: dict = tu.create_item(5)
+        self.assertIn('item_id', item1)
+        item_id1: str = item1['item_id']
+        add_stock_response = tu.add_stock(item_id1, 15)
+        self.assertTrue(tu.status_code_is_success(add_stock_response))
+
+        item2: dict = tu.create_item(5)
+        self.assertIn('item_id', item2)
+        item_id2: str = item2['item_id']
+        add_stock_response = tu.add_stock(item_id2, 15)
+        self.assertTrue(tu.status_code_is_success(add_stock_response))
+
+        items_amounts = {item_id1: 5, item_id2: 10}
+        subtract_bulk_response = tu.subtract_stock_bulk(items_amounts)
+        self.assertTrue(tu.status_code_is_success(subtract_bulk_response))
+
+        stock_after_subtract1: int = tu.find_item(item_id1)['stock']
+        self.assertEqual(stock_after_subtract1, 10)
+
+        stock_after_subtract2: int = tu.find_item(item_id2)['stock']
+        self.assertEqual(stock_after_subtract2, 5)
+
+    def test_add_bulk(self):
+        item1: dict = tu.create_item(5)
+        self.assertIn('item_id', item1)
+        item_id1: str = item1['item_id']
+        add_stock_response = tu.add_stock(item_id1, 15)
+        self.assertTrue(tu.status_code_is_success(add_stock_response))
+
+        item2: dict = tu.create_item(5)
+        self.assertIn('item_id', item2)
+        item_id2: str = item2['item_id']
+        add_stock_response = tu.add_stock(item_id2, 15)
+        self.assertTrue(tu.status_code_is_success(add_stock_response))
+
+        items_amounts = {item_id1: 5, item_id2: 10}
+        add_bulk_response = tu.add_stock_bulk(items_amounts)
+        self.assertTrue(tu.status_code_is_success(add_bulk_response))
+
+        stock_after_add1: int = tu.find_item(item_id1)['stock']
+        self.assertEqual(stock_after_add1, 20)
+
+        stock_after_add2: int = tu.find_item(item_id2)['stock']
+        self.assertEqual(stock_after_add2, 25)
+
     def test_stock(self):
         # Test /stock/item/create/<price>
         item: dict = tu.create_item(5)

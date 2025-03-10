@@ -1,10 +1,12 @@
+import time
 
 import redis
 import atexit
 from msgspec import msgpack
 
 LOCK_EXPIRY=3 # 3 seconds lock expiry in case of error
-
+MAX_RETRIES = 3
+RETRY_DELAY = 0.1
 
 def configure_redis(host: str, port: int = 6379) -> redis.RedisCluster:
     """
@@ -24,6 +26,15 @@ def configure_redis(host: str, port: int = 6379) -> redis.RedisCluster:
     )
     atexit.register(lambda: db.close())
     return db
+
+def attempt_acquire_locks(db, stock_keys):
+    """Attempts to acquiri e locks on stock keys with retry logic."""
+    for attempt in range(MAX_RETRIES):
+        acquired_locks = acquire_locks(db, stock_keys)
+        if acquired_locks:
+            return acquired_locks
+        time.sleep(RETRY_DELAY)  # Wait before retrying
+    return None
 
 def acquire_locks(db, keys):
     """Try to acquire locks for all relevant stock keys."""

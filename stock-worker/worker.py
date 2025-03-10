@@ -11,7 +11,7 @@ from msgspec import msgpack
 from common.msg_types import MsgType
 import time
 from common.queue_utils import consume_events
-from common.redis_utils import configure_redis, acquire_locks, release_locks
+from common.redis_utils import configure_redis, acquire_locks, release_locks, attempt_acquire_locks
 from common.request_utils import create_error_message, create_response_message
 
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
@@ -113,53 +113,43 @@ def remove_stock(item_id: str, amount: int):
         is_json=False
     )
 
-def remove_stock_for_saga(item_dict: dict[str, int]):
+def subtract_bulk(item_dict: dict[str, int]):
     """Attempts to decrement stock safely while locking only relevant keys."""
     stock_keys = [f"{item_id}-stock" for item_id in item_dict.keys()]
 
-    # TODO RETRY LOGIC MAKE MORE CLEVER
-    MAX_RETRIES = 3
-    RETRY_DELAY = 0.1
+    # Attempt to acquire locks
+    acquired_locks = attempt_acquire_locks(db, stock_keys)
+    if not acquired_locks:
+        return create_error_message("Failed to acquire necessary locks after multiple retries")
 
-    for attempt in range(MAX_RETRIES):
-        acquired_locks = acquire_locks(db, stock_keys)
-        if not acquired_locks:
-            time.sleep(RETRY_DELAY)
-            continue  # Retry acquiring locks
+    try:
+        # Fetch current stock levels and check availability
+        for item_id, amount in item_dict.items():
+            stock_key = f"{item_id}-stock"
+            current_stock = db.get(stock_key)
 
-        try:
-            # Fetch current stock levels and check availability
-            for item_id, amount in item_dict.items():
-                stock_key = f"{item_id}-stock"
-                current_stock = db.get(stock_key)
+            # If stock is unavailable or insufficient, rollback
+            if current_stock is None or int(current_stock) < amount:
+                return create_error_message("Not enough stock for one or more items")
 
-                # If stock is unavailable or insufficient, rollback
-                if current_stock is None or int(current_stock) < amount:
-                    # Rollback by releasing locks and returning error
-                    return create_error_message("Not enough stock for one or more items")
-
-
-            pipeline = db.pipeline()
+        # If sufficient stock is available, update in a pipeline
+        with db.pipeline() as pipeline:
             for item_id, amount in item_dict.items():
                 pipeline.decrby(f"{item_id}-stock", amount)
-
             pipeline.execute()
 
+        return create_response_message(
+            content="All items' stock successfully updated for the saga.",
+            is_json=False
+        )
 
-            return create_response_message(
-                content="All items' stock successfully updated for the saga.",
-                is_json=False
-            )
+    except redis.exceptions.RedisError as e:
+        return create_error_message(f"Redis error: {str(e)}")
 
-        except redis.exceptions.RedisError as e:
-            return create_error_message(f"Redis error: {str(e)}")
+    finally:
+        release_locks(db, acquired_locks)
 
-        finally:
-            release_locks(db, acquired_locks)
-
-    return create_error_message("Failed to acquire necessary locks after multiple retries")
-
-def reverse_stock_for_saga(item_dict: dict[str, int]):
+def add_bulk(item_dict: dict[str, int]):
     try:
         # Use a pipeline to send multiple INCRBY commands in a batch
         with db.pipeline() as pipe:
@@ -194,10 +184,10 @@ async def process_message(message: AbstractIncomingMessage):
     elif message_type == MsgType.SUBTRACT:
         return remove_stock(item_id=content["item_id"], amount=content["amount"])
     elif message_type == MsgType.SAGA_INIT:
-        return remove_stock_for_saga(item_dict=content["item_dict"])
+        return subtract_bulk(item_dict=content["item_dict"])
     elif message_type == MsgType.SAGA_STOCK_REVERSE:
         logging.error("SAGA REVERSAL INCOMING ON STOCK ")
-        return reverse_stock_for_saga(item_dict=content["item_dict"])
+        return add_bulk(item_dict=content["item_dict"])
     elif message_type == MsgType.SAGA_PAYMENT_REVERSE:
         return None # Ignore
 
