@@ -1,13 +1,9 @@
 import asyncio
-import time
-import logging
 import os
 import random
 import uuid
-from collections import defaultdict
 from saga import check_saga_completion
 import redis
-import requests
 from aio_pika.abc import AbstractIncomingMessage
 import aiohttp
 
@@ -16,7 +12,7 @@ from msgspec import msgpack
 from common.msg_types import MsgType
 from common.queue_utils import consume_events, OrderWorkerClient
 from common.request_utils import create_response_message, create_error_message
-from common.redis_utils import configure_redis, acquire_locks, release_locks
+from common.redis_utils import configure_redis
 from model import OrderValue
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
@@ -100,10 +96,10 @@ def find_order(order_id: str):
 async def add_item(order_id: str, item_id: str, quantity: int):
     try:
         order_entry: OrderValue = get_order_from_db(order_id)
+        if order_entry is None:
+            return create_error_message(f"Order: {order_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
-    if order_entry is None:
-        return create_error_message(f"Order: {order_id} not found")
 
     async with aiohttp.ClientSession() as session:
         async with session.get(f"{GATEWAY_URL}/stock/find/{item_id}") as item_reply:
@@ -136,28 +132,14 @@ async def checkout(order_id: str, correlation_id: str, reply_to: str):
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-    items_quantities: dict[str, int] = defaultdict(int)
-    for item_id, quantity in order_entry.items:
-        items_quantities[item_id] += quantity
-
-    call_msg = {
-        'item_dict': items_quantities,
-        'amount': order_entry.total_cost,
-        'user_id': order_entry.user_id
-    }
-
-    saga_key = f"saga-{correlation_id}"
-    db.hsetnx(saga_key, 'order_id', order_id)
-    db.hsetnx(saga_key, 'reply_to', reply_to)
+    db.hset(f"saga-{correlation_id}", mapping={'order_id': order_id, 'reply_to': reply_to})
 
     await order_worker_client.order_fanout_call(
-        msg=call_msg,
+        msg=order_entry,
         msg_type=MsgType.SAGA_INIT,
         correlation_id=correlation_id,
         reply_to=os.environ['ROUTE_KEY']
     )
-
-    return None
 
 async def handle_payment_saga_response(status_code, correlation_id):
     db.hsetnx(f"saga-{correlation_id}", "payment", "1" if status_code == 200 else "0")
@@ -196,15 +178,12 @@ def get_custom_reply_to(message: AbstractIncomingMessage) -> str:
         reply_to = reply_to.decode('utf-8') if reply_to else None
         return reply_to
 
-    return None
-
 async def main():
     global order_worker_client
     order_worker_client = await OrderWorkerClient(
         rabbitmq_url=os.environ['RABBITMQ_URL'],
         exchange_key=os.environ['ORDER_OUTBOUND_EXCHANGE_IDENTIFIER']
     ).connect()
-
 
     await consume_events(
         process_message=process_message,

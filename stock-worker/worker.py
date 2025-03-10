@@ -9,9 +9,8 @@ from aio_pika.abc import AbstractIncomingMessage
 from msgspec import msgpack
 
 from common.msg_types import MsgType
-import time
 from common.queue_utils import consume_events
-from common.redis_utils import configure_redis, acquire_locks, release_locks, attempt_acquire_locks
+from common.redis_utils import configure_redis, release_locks, attempt_acquire_locks
 from common.request_utils import create_error_message, create_response_message
 
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
@@ -113,61 +112,50 @@ def remove_stock(item_id: str, amount: int):
         is_json=False
     )
 
+def check_and_validate_stock(item_dict: dict[str, int]) :
+    """Validates if there is enough stock for all items in the dictionary."""
+    for item_id, amount in item_dict.items():
+        stock_key = f"{item_id}-stock"
+        current_stock = db.get(stock_key)
+        if current_stock is None or int(current_stock) < amount:
+            return create_error_message(f"Not enough stock for item: {item_id}")
+    # No errors, stock is sufficient
+
+def update_stock_in_db(item_dict: dict[str, int], operation_func):
+    """Updates stock in the database via pipeline for the specified operation."""
+    try:
+        with db.pipeline() as pipe:
+            for item_id, amount in item_dict.items():
+                operation_func(pipe, f"{item_id}-stock", amount)
+            pipe.execute()
+    except redis.exceptions.RedisError as e:
+        return create_error_message(f"Redis error: {e}")
+
 def subtract_bulk(item_dict: dict[str, int]):
     """Attempts to decrement stock safely while locking only relevant keys."""
     stock_keys = [f"{item_id}-stock" for item_id in item_dict.keys()]
-
     # Attempt to acquire locks
-    acquired_locks = attempt_acquire_locks(db, stock_keys)
-    if not acquired_locks:
+    if not (acquired_locks := attempt_acquire_locks(db, stock_keys)):
         return create_error_message("Failed to acquire necessary locks after multiple retries")
-
     try:
         # Fetch current stock levels and check availability
-        for item_id, amount in item_dict.items():
-            stock_key = f"{item_id}-stock"
-            current_stock = db.get(stock_key)
-
-            # If stock is unavailable or insufficient, rollback
-            if current_stock is None or int(current_stock) < amount:
-                return create_error_message("Not enough stock for one or more items")
-
+        if validation_error := check_and_validate_stock(item_dict):
+            return validation_error
         # If sufficient stock is available, update in a pipeline
-        with db.pipeline() as pipeline:
-            for item_id, amount in item_dict.items():
-                pipeline.decrby(f"{item_id}-stock", amount)
-            pipeline.execute()
-
-        return create_response_message(
-            content="All items' stock successfully updated for the saga.",
-            is_json=False
-        )
-
-    except redis.exceptions.RedisError as e:
-        return create_error_message(f"Redis error: {str(e)}")
-
+        if updating_error := update_stock_in_db(item_dict, lambda p, k, a: p.decrby(k, a)):
+            return updating_error
+        return create_response_message(content="All items' stock successfully updated for the saga.", is_json=False)
     finally:
         release_locks(db, acquired_locks)
 
 def add_bulk(item_dict: dict[str, int]):
-    try:
-        # Use a pipeline to send multiple INCRBY commands in a batch
-        with db.pipeline() as pipe:
-            for item_id, amount in item_dict.items():
-                key = item_id + "-stock"
-                pipe.incrby(key, amount)
-
-            # Execute the batch commands
-            pipe.execute()
-
-        return create_response_message(
-            content="Stock successfully restored for the saga reversal.",
-            is_json=False
-        )
-
-    except redis.exceptions.RedisError as e:
-        return create_error_message(str(e))
-
+    # Use a pipeline to send multiple INCRBY commands in a batch
+    if updating_error :=update_stock_in_db(item_dict, lambda p, k, a: p.incrby(k, a)):
+        return updating_error
+    return create_response_message(
+        content="Stock successfully restored for the saga reversal.",
+        is_json=False
+    )
 
 async def process_message(message: AbstractIncomingMessage):
     message_type = message.type
@@ -184,7 +172,7 @@ async def process_message(message: AbstractIncomingMessage):
     elif message_type == MsgType.SUBTRACT:
         return remove_stock(item_id=content["item_id"], amount=content["amount"])
     elif message_type == MsgType.SAGA_INIT:
-        return subtract_bulk(item_dict=content["item_dict"])
+        return subtract_bulk(item_dict=dict(content["items"]))
     elif message_type == MsgType.SAGA_STOCK_REVERSE:
         logging.error("SAGA REVERSAL INCOMING ON STOCK ")
         return add_bulk(item_dict=content["item_dict"])
@@ -197,8 +185,6 @@ async def process_message(message: AbstractIncomingMessage):
 def get_message_response_type(message: AbstractIncomingMessage) -> str:
     if message.type == MsgType.SAGA_INIT:
         return MsgType.SAGA_STOCK_RESPONSE
-
-    return None
 
 if __name__ == "__main__":
     asyncio.run(consume_events(

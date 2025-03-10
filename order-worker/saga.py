@@ -1,17 +1,18 @@
-import asyncio
-import logging
-import os
-from collections import defaultdict, Counter
+from collections import defaultdict
 
 import redis
 from msgspec import msgpack
 
 from common.msg_types import MsgType
-from common.redis_utils import release_locks, acquire_locks, attempt_acquire_locks
+from common.redis_utils import release_locks, attempt_acquire_locks
 from common.request_utils import create_error_message, create_response_message
 from model import OrderValue
 
 SAGA_TIMEOUT = 30
+
+# ====================
+# Saga Processing Logic
+# ====================
 
 async def process_saga(db, order_worker_client, correlation_id: str):
     """Processes the saga completion based on stored states."""
@@ -27,7 +28,7 @@ async def process_saga(db, order_worker_client, correlation_id: str):
 
     return await handle_saga_completion(db, order_worker_client, order_id, payment_status, stock_status, correlation_id)
 
-async def handle_saga_completion(db, order_worker_client, order_id, payment_status, stock_status, correlation_id):
+async def handle_saga_completion(db, order_worker_client, order_id: str, payment_status: int, stock_status: int, correlation_id):
     """Handles the different completion scenarios of the saga."""
     try:
         entry: bytes = db.get(order_id)
@@ -46,6 +47,10 @@ async def handle_saga_completion(db, order_worker_client, order_id, payment_stat
 
     return create_error_message("Both payment and stock services failed in the SAGA.")
 
+# =========================
+# Finalization and Reversal
+# =========================
+
 async def finalize_order(db, order_id, order_entry):
     """Finalizes the order if both stock and payment succeed."""
     try:
@@ -54,7 +59,6 @@ async def finalize_order(db, order_id, order_entry):
         return create_response_message("Checkout successful!", is_json=False)
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
-
 
 async def reverse_payment(order_worker_client, order_entry, correlation_id):
     """Reverses the payment if stock fails."""
@@ -66,13 +70,9 @@ async def reverse_payment(order_worker_client, order_entry, correlation_id):
     )
     return create_error_message("Stock service failed in the SAGA, payment reversed.")
 
-
 async def reverse_stock(order_worker_client, order_entry, correlation_id):
     """Reverses the stock if payment fails."""
-    items_quantities = defaultdict(int)
-    for item_id, quantity in order_entry.items:
-        items_quantities[item_id] += quantity
-
+    items_quantities = {item_id: quantity for item_id, quantity in order_entry.items}
     await order_worker_client.order_fanout_call(
         msg={"item_dict": items_quantities, "user_id": order_entry.user_id},
         msg_type=MsgType.SAGA_STOCK_REVERSE,
@@ -82,11 +82,14 @@ async def reverse_stock(order_worker_client, order_entry, correlation_id):
     return create_error_message("Payment service failed in the SAGA, stock reversed.")
 
 
+# =====================
+# Saga Completion Check
+# =====================
+
 async def check_saga_completion(db, order_worker_client, correlation_id):
     """Check if both payment and stock responses are available atomically using a single lock with retries."""
     lock_key = f"saga-{correlation_id}" # Lock key for the saga correlation ID
-    lock = attempt_acquire_locks(db, [lock_key])
-    if lock is not None:
+    if attempt_acquire_locks(db, [lock_key]):
         try:
             # Now that we have acquired the lock, check the status in the hash
             return await process_saga(db, order_worker_client, correlation_id)

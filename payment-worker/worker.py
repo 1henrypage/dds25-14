@@ -3,7 +3,6 @@ import os
 import uuid
 
 import redis
-import logging
 from aio_pika.abc import AbstractIncomingMessage
 from msgspec import msgpack
 
@@ -118,9 +117,10 @@ async def process_message(message: AbstractIncomingMessage):
         return find_user(user_id=content['user_id'])
     elif message_type in (MsgType.ADD, MsgType.SAGA_PAYMENT_REVERSE):
         return add_credit(user_id=content['user_id'], amount=content['amount'])
-    elif message_type in (MsgType.SUBTRACT, MsgType.SAGA_INIT):
+    elif message_type == MsgType.SUBTRACT:
         return remove_credit(user_id=content['user_id'], amount=content['amount'])
-
+    elif message_type == MsgType.SAGA_INIT:
+        return remove_credit(user_id=content['user_id'], amount=content['total_cost'])
     elif message_type == MsgType.SAGA_STOCK_REVERSE:
         return None # Ignore
 
@@ -131,8 +131,6 @@ async def process_message(message: AbstractIncomingMessage):
 def get_message_response_type(message: AbstractIncomingMessage) -> str:
     if message.type == MsgType.SAGA_INIT:
         return MsgType.SAGA_PAYMENT_RESPONSE
-
-    return None
 
 if __name__ == "__main__":
     asyncio.run(consume_events(

@@ -2,7 +2,6 @@ import time
 
 import redis
 import atexit
-from msgspec import msgpack
 
 LOCK_EXPIRY=3 # 3 seconds lock expiry in case of error
 MAX_RETRIES = 3
@@ -29,33 +28,24 @@ def configure_redis(host: str, port: int = 6379) -> redis.RedisCluster:
 
 def attempt_acquire_locks(db, stock_keys):
     """Attempts to acquiri e locks on stock keys with retry logic."""
-    for attempt in range(MAX_RETRIES):
+    for _ in range(MAX_RETRIES):
         acquired_locks = acquire_locks(db, stock_keys)
         if acquired_locks:
             return acquired_locks
         time.sleep(RETRY_DELAY)  # Wait before retrying
-    return None
 
-def acquire_locks(db, keys):
+def acquire_locks(db, keys: list[str]) -> list[str] | None:
     """Try to acquire locks for all relevant stock keys."""
     lock_keys = [f"{key}-lock" for key in keys]  # Ensure consistent lock key formatting
-    acquired_locks = []
+    # Try to acquire all locks
+    if all(db.set(lock, "1", nx=True, ex=LOCK_EXPIRY) for lock in lock_keys):
+        return lock_keys
+    # If any lock fails, release all acquired locks and return None
+    release_locks(db, keys)
+    return None
 
-    for lock in lock_keys:
-        if db.set(lock, "1", nx=True, ex=LOCK_EXPIRY):
-            acquired_locks.append(lock)
-        else:
-            # If any lock fails, release all acquired locks
-            release_locks(db, keys)  # Pass original keys
-            return None
-
-    return acquired_locks
-
-def release_locks(db, keys):
+def release_locks(db, keys: list[str]):
     """Release the locks."""
     lock_keys = [f"{key}-lock" for key in keys]  # Ensure consistent lock key formatting
     if lock_keys:
         db.delete(*lock_keys)
-
-
-
