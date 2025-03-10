@@ -168,14 +168,14 @@ async def process_message(message: AbstractIncomingMessage):
     elif message_type == MsgType.FIND:
         return find_item(item_id=content["item_id"])
     elif message_type == MsgType.ADD:
-        return add_stock(item_id=content["item_id"], amount=content["amount"])
+        return add_stock(item_id=content["item_id"], amount=content["total_cost"])
     elif message_type == MsgType.SUBTRACT:
-        return remove_stock(item_id=content["item_id"], amount=content["amount"])
+        return remove_stock(item_id=content["item_id"], amount=content["total_cost"])
     elif message_type == MsgType.SAGA_INIT:
         return subtract_bulk(item_dict=dict(content["items"]))
     elif message_type == MsgType.SAGA_STOCK_REVERSE:
         logging.error("SAGA REVERSAL INCOMING ON STOCK ")
-        return add_bulk(item_dict=content["item_dict"])
+        return add_bulk(item_dict=dict(content["items"]))
     elif message_type == MsgType.SAGA_PAYMENT_REVERSE:
         return None # Ignore
 

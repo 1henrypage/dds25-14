@@ -116,9 +116,9 @@ async def process_message(message: AbstractIncomingMessage):
     elif message_type == MsgType.FIND:
         return find_user(user_id=content['user_id'])
     elif message_type in (MsgType.ADD, MsgType.SAGA_PAYMENT_REVERSE):
-        return add_credit(user_id=content['user_id'], amount=content['amount'])
+        return add_credit(user_id=content['user_id'], amount=content["total_cost"])
     elif message_type == MsgType.SUBTRACT:
-        return remove_credit(user_id=content['user_id'], amount=content['amount'])
+        return remove_credit(user_id=content['user_id'], amount=content["total_cost"])
     elif message_type == MsgType.SAGA_INIT:
         return remove_credit(user_id=content['user_id'], amount=content['total_cost'])
     elif message_type == MsgType.SAGA_STOCK_REVERSE:

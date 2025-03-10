@@ -63,7 +63,7 @@ async def finalize_order(db, order_id, order_entry):
 async def reverse_payment(order_worker_client, order_entry, correlation_id):
     """Reverses the payment if stock fails."""
     await order_worker_client.order_fanout_call(
-        msg={"amount": order_entry.total_cost, "user_id": order_entry.user_id},
+        msg=order_entry,
         msg_type=MsgType.SAGA_PAYMENT_REVERSE,
         correlation_id=correlation_id,
         reply_to=None,
@@ -72,9 +72,8 @@ async def reverse_payment(order_worker_client, order_entry, correlation_id):
 
 async def reverse_stock(order_worker_client, order_entry, correlation_id):
     """Reverses the stock if payment fails."""
-    items_quantities = {item_id: quantity for item_id, quantity in order_entry.items}
     await order_worker_client.order_fanout_call(
-        msg={"item_dict": items_quantities, "user_id": order_entry.user_id},
+        msg=order_entry,
         msg_type=MsgType.SAGA_STOCK_REVERSE,
         correlation_id=correlation_id,
         reply_to=None,

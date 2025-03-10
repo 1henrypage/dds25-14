@@ -46,13 +46,13 @@ async def find_item(item_id: str):
 
 @app.post('/add/<item_id>/<amount>')
 async def add_stock(item_id: str, amount: int):
-    response = await rpc_client.call(msg={"item_id": item_id, "amount": amount}, msg_type=MsgType.ADD)
+    response = await rpc_client.call(msg={"item_id": item_id, "total_cost": amount}, msg_type=MsgType.ADD)
     return process_encoded_response_body(response=response)
 
 
 @app.post('/subtract/<item_id>/<amount>')
 async def remove_stock(item_id: str, amount: int):
-    response = await rpc_client.call(msg={"item_id": item_id, "amount": amount}, msg_type=MsgType.SUBTRACT)
+    response = await rpc_client.call(msg={"item_id": item_id, "total_cost": amount}, msg_type=MsgType.SUBTRACT)
     return process_encoded_response_body(response=response)
 
 @app.post('/subtract-bulk')
@@ -64,7 +64,7 @@ async def remove_stock_bulk():
 @app.post('/add-bulk')
 async def add_stock_bulk():
     data = await request.get_json()
-    response = await rpc_client.call(msg={"item_dict": data}, msg_type=MsgType.SAGA_STOCK_REVERSE)
+    response = await rpc_client.call(msg={"items": data}, msg_type=MsgType.SAGA_STOCK_REVERSE)
     return process_encoded_response_body(response=response)
 
 
