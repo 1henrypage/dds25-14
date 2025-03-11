@@ -21,11 +21,6 @@ def add_stock(item_id: str, amount: int) -> int:
 def subtract_stock(item_id: str, amount: int) -> int:
     return requests.post(f"{STOCK_URL}/stock/subtract/{item_id}/{amount}").status_code
 
-def subtract_stock_bulk(items_amounts: dict[str, int]) -> int:
-    return requests.post(f"{STOCK_URL}/stock/subtract-bulk", json=items_amounts).status_code
-
-def add_stock_bulk(items_amounts: dict[str, int]) -> int:
-    return requests.post(f"{STOCK_URL}/stock/add-bulk", json=items_amounts).status_code
 
 ########################################################################################################################
 #   PAYMENT MICROSERVICE FUNCTIONS

@@ -174,7 +174,6 @@ async def process_message(message: AbstractIncomingMessage):
     elif message_type == MsgType.SAGA_INIT:
         return subtract_bulk(item_dict=dict(content["items"]))
     elif message_type == MsgType.SAGA_STOCK_REVERSE:
-        logging.error("SAGA REVERSAL INCOMING ON STOCK ")
         return add_bulk(item_dict=dict(content["items"]))
     elif message_type == MsgType.SAGA_PAYMENT_REVERSE:
         return None # Ignore

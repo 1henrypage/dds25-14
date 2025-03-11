@@ -120,7 +120,7 @@ class RpcClient:
         :return: Nothing, the future will have a result
         """
         if message.correlation_id is None:
-            logging.error(f"Message doesn't have correlation ID: {message!r}")
+            logging.debug(f"Message doesn't have correlation ID: {message!r}")
             return
 
         future: asyncio.Future = self.futures.pop(message.correlation_id)
