@@ -129,4 +129,4 @@ def process_message(message_type, content):
 
 
 if __name__ == "__main__":
-    asyncio.run(consume_events(process_message))
+    asyncio.run(consume_events(process_message,db=db))

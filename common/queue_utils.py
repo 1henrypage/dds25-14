@@ -3,6 +3,7 @@ import uuid
 import os
 import logging
 from typing import MutableMapping, Callable, Any
+import redis
 
 from msgspec import msgpack
 
@@ -11,6 +12,7 @@ from aio_pika.abc import (
     AbstractChannel, AbstractConnection, AbstractIncomingMessage, AbstractQueue
 )
 
+from common.idempotency_utils import IdempotencyManager
 from common.msg_types import MsgType
 
 
@@ -76,7 +78,7 @@ class RpcClient:
         """
         correlation_id = str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
-
+  
         self.futures[correlation_id] = future
 
         await self.channel.default_exchange.publish(
@@ -104,12 +106,13 @@ class RpcClient:
             await self.connection.close()  # Close the connection
 
 
-async def consume_events(process_message: Callable[[str, Any], Any]) -> None:
+async def consume_events(process_message: Callable[[str, Any], Any],db: redis.RedisCluster) -> None:
     """
     Event loop function which just listens for events in an egress queue. (THIS IS FOR THE WORKER)
     This will process messages and forward events in a specific response queue.
 
     :param process_message: Lambda function which should be defined as follows
+    :param db: redis instance
     input: (message_type: str, content: idk)
     return wrapped_response
     you can see examples of this at the bottom of each worker.py file.
@@ -120,6 +123,7 @@ async def consume_events(process_message: Callable[[str, Any], Any]) -> None:
     channel = await connection.channel()
     exchange = channel.default_exchange
     queue = await channel.declare_queue(os.environ['ROUTE_KEY'])
+    idempotency_manager = IdempotencyManager(db)
 
     async with queue.iterator() as qiterator:
         message: AbstractIncomingMessage
@@ -129,13 +133,29 @@ async def consume_events(process_message: Callable[[str, Any], Any]) -> None:
                 # TODO EXPONENTIAL BACKOFF WILL NEED TO BE IMPLEMENTED MANUALLY
                 async with message.process(requeue=False):
                     assert message.reply_to is not None
+                    is_new, stored_response = await idempotency_manager.check_and_set_request(message.correlation_id)
+                    # duplicated request, send cached response
+                    if not is_new and stored_response:
+                        await exchange.publish(
+                            Message(
+                                body=stored_response,
+                                content_type="application/msgpack",
+                                correlation_id=message.correlation_id,
+                                delivery_mode=DeliveryMode.PERSISTENT
+                                ),
+                            routing_key=message.reply_to,
+                        )
+                        continue
                     message_type = message.type
                     message_body = msgpack.decode(message.body)
                     result = process_message(message_type, message_body)
+                    encoded_result = msgpack.encode(result)
+
+                    await idempotency_manager.store_response(message.correlation_id,encoded_result)
 
                     await exchange.publish(
                         Message(
-                            body=msgpack.encode(result),
+                            body=encoded_result,
                             content_type="application/msgpack",
                             correlation_id=message.correlation_id,
                             delivery_mode=DeliveryMode.PERSISTENT,

@@ -131,4 +131,4 @@ def process_message(message_type, content):
     return create_error_message(error=f"Unknown message type: {message_type}")
 
 if __name__ == "__main__":
-    asyncio.run(consume_events(process_message))
+    asyncio.run(consume_events(process_message,db=db))
