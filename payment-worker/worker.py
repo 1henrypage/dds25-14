@@ -29,7 +29,10 @@ def batch_init_users(n: int, starting_money: int):
     starting_money = int(starting_money)
     kv_pairs: dict[str, int] = {f"{i}": starting_money for i in range(n)}
     try:
-        db.mset(kv_pairs)
+        with db.pipeline() as pipe:
+            for key, value in kv_pairs.items():
+                pipe.set(key, value)
+            pipe.execute()
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
     return create_response_message(

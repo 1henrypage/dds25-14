@@ -39,8 +39,13 @@ def batch_init_users(n: int, starting_stock: int, item_price: int):
     stock_kv_pairs: dict[str, int] = {f"user:{i}-stock": starting_stock for i in range(n)}
 
     try:
-        db.mset(price_kv_pairs)
-        db.mset(stock_kv_pairs)
+        with db.pipeline() as pipe:
+            for key, value in price_kv_pairs.items():
+                pipe.set(key, value)
+
+            for key, value in stock_kv_pairs.items():
+                pipe.set(key, value)
+            pipe.execute()
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 

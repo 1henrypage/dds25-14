@@ -62,7 +62,10 @@ def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(generate_entry())
                                   for i in range(n)}
     try:
-        db.mset(kv_pairs)
+        with db.pipeline() as pipe:
+            for key, value in kv_pairs.items():
+                pipe.set(key, value)
+            pipe.execute()
     except redis.exceptions.RedisError as e:
         return create_error_message(
             error=str(e)
