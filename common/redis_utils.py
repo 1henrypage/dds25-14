@@ -5,7 +5,7 @@ import atexit
 
 LOCK_EXPIRY=3 # 3 seconds lock expiry in case of error
 MAX_RETRIES = 3
-RETRY_DELAY = 0.1
+RETRY_DELAY = 0.1 # TODO make this exponentiaal backofff
 
 def configure_redis(host: str, port: int = 6379) -> redis.RedisCluster:
     """
@@ -38,7 +38,13 @@ def acquire_locks(db, keys: list[str]) -> list[str] | None:
     """Try to acquire locks for all relevant stock keys."""
     lock_keys = [f"{key}-lock" for key in keys]  # Ensure consistent lock key formatting
     # Try to acquire all locks
-    if all(db.set(lock, "1", nx=True, ex=LOCK_EXPIRY) for lock in lock_keys):
+    with db.pipeline() as pipe:
+        for lock in lock_keys:
+            pipe.set(lock, "1", nx=True, ex=LOCK_EXPIRY)
+
+        lock_results = pipe.execute()
+
+    if all(lock_results):
         return lock_keys
     # If any lock fails, release all acquired locks and return None
     release_locks(db, keys)
@@ -47,5 +53,9 @@ def acquire_locks(db, keys: list[str]) -> list[str] | None:
 def release_locks(db, keys: list[str]):
     """Release the locks."""
     lock_keys = [f"{key}-lock" for key in keys]  # Ensure consistent lock key formatting
-    if lock_keys:
-        db.delete(*lock_keys)
+
+    with db.pipeline() as pipe:
+        for lock in lock_keys:
+            pipe.delete(lock)
+
+        pipe.execute()
