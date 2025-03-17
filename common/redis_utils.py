@@ -26,10 +26,10 @@ def configure_redis(host: str, port: int = 6379) -> redis.RedisCluster:
     atexit.register(lambda: db.close())
     return db
 
-def attempt_acquire_locks(db, stock_keys):
+def attempt_acquire_locks(db, keys):
     """Attempts to acquiri e locks on stock keys with retry logic."""
     for _ in range(MAX_RETRIES):
-        acquired_locks = acquire_locks(db, stock_keys)
+        acquired_locks = acquire_locks(db, keys)
         if acquired_locks:
             return acquired_locks
         time.sleep(RETRY_DELAY)  # Wait before retrying
