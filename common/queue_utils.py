@@ -208,7 +208,7 @@ async def consume_events(process_message: Callable[[AbstractIncomingMessage], An
                 async with message.process(requeue=False):
 
                     result = await process_message(message)
-                    reply_to = get_custom_reply_to(message) or message.reply_to
+                    reply_to = await get_custom_reply_to(message) or message.reply_to
 
                     if reply_to is not None and len(reply_to) > 0 and result is not None:
                         await exchange.publish(
