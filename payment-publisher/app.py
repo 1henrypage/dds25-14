@@ -1,7 +1,4 @@
-import asyncio
 from quart import Quart, request, jsonify, redirect, abort, Response
-import aio_pika
-import sys
 import os
 import logging
 
@@ -12,9 +9,6 @@ from common.queue_utils import RpcClient
 app = Quart("payment-publisher")
 
 rpc_client: RpcClient = None
-
-allow_flag = True
-
 
 @app.before_serving
 async def before_serving():
