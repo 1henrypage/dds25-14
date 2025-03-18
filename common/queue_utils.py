@@ -89,6 +89,7 @@ class RpcClient:
     callback_queue: AbstractQueue
     rabbitmq_url: str
     routing_key: str
+    online: bool
 
     def __init__(self, routing_key: str, rabbitmq_url: str) -> None:
         """
@@ -100,6 +101,7 @@ class RpcClient:
         self.futures: MutableMapping[str, asyncio.Future] = {}
         self.rabbitmq_url = rabbitmq_url
         self.routing_key = routing_key
+        self.online = False
 
     async def connect(self) -> "RpcClient":
         """
@@ -110,6 +112,7 @@ class RpcClient:
         self.channel = await self.connection.channel()
         self.callback_queue = await self.channel.declare_queue(exclusive=True)
         await self.callback_queue.consume(self.on_response, no_ack=True)
+        self.online = True
         return self
 
     async def on_response(self, message: AbstractIncomingMessage) -> None:
@@ -135,6 +138,10 @@ class RpcClient:
         :param msg_type: The type of message to forward
         :return: A future which will resolve with the response.
         """
+
+        if not self.online:
+            raise RuntimeError("RpcClient is offline. Cannot send messages.")
+
         correlation_id = str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
 
@@ -158,6 +165,11 @@ class RpcClient:
         """
         Disconnects the client gracefully
         """
+
+        self.online = False
+
+        if self.futures:
+            await asyncio.gather(*self.futures.values(), return_exceptions=True)
 
         if self.channel:
             await self.channel.close()  # Close the channel

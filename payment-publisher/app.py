@@ -1,6 +1,4 @@
-import asyncio
 from quart import Quart, request, jsonify, redirect, abort, Response
-import aio_pika
 import os
 import logging
 
