@@ -52,22 +52,20 @@ async def find_user(user_id: str):
         response=response,
     )
 
-
 @app.post('/add_funds/<user_id>/<amount>')
 async def add_credit(user_id: str, amount: int):
     response = await rpc_client.call(
-        msg={"user_id": user_id, "amount": int(amount)},
+        msg={"user_id": user_id, "total_cost": int(amount)},
         msg_type=MsgType.ADD
     )
     return process_encoded_response_body(
         response=response,
     )
 
-
 @app.post('/pay/<user_id>/<amount>')
 async def remove_credit(user_id: str, amount: int):
     response = await rpc_client.call(
-        msg={"user_id": user_id, "amount": int(amount)},
+        msg={"user_id": user_id, "total_cost": int(amount)},
         msg_type=MsgType.SUBTRACT
     )
     return process_encoded_response_body(

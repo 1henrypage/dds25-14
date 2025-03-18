@@ -46,15 +46,14 @@ async def find_item(item_id: str):
 
 @app.post('/add/<item_id>/<amount>')
 async def add_stock(item_id: str, amount: int):
-    response = await rpc_client.call(msg={"item_id": item_id, "amount": amount}, msg_type=MsgType.ADD)
+    response = await rpc_client.call(msg={"item_id": item_id, "total_cost": amount}, msg_type=MsgType.ADD)
     return process_encoded_response_body(response=response)
 
 
 @app.post('/subtract/<item_id>/<amount>')
 async def remove_stock(item_id: str, amount: int):
-    response = await rpc_client.call(msg={"item_id": item_id, "amount": amount}, msg_type=MsgType.SUBTRACT)
+    response = await rpc_client.call(msg={"item_id": item_id, "total_cost": amount}, msg_type=MsgType.SUBTRACT)
     return process_encoded_response_body(response=response)
-
 
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=8000, debug=True)
