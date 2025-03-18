@@ -199,7 +199,8 @@ async def consume_events(process_message: Callable[[AbstractIncomingMessage], An
     channel = await connection.channel()
     exchange = channel.default_exchange
     queue = await channel.declare_queue(os.environ['ROUTE_KEY'])
-    idempotency_manager = IdempotencyManager(db)
+    idempotency_manager = IdempotencyManager(db=db)
+
     if "ORDER_OUTBOUND" in os.environ:
         order_outbound_exchange = await channel.declare_exchange(os.environ['ORDER_OUTBOUND'], ExchangeType.FANOUT, durable=True)
         await queue.bind(order_outbound_exchange)
@@ -212,7 +213,7 @@ async def consume_events(process_message: Callable[[AbstractIncomingMessage], An
                 # TODO EXPONENTIAL BACKOFF WILL NEED TO BE IMPLEMENTED MANUALLY
                 async with message.process(requeue=False):
 
-                    is_new, stored_response = await idempotency_manager.check_and_set_request(message.correlation_id)
+                    is_new, stored_response = idempotency_manager.check_and_set_request(message.correlation_id)
                     # duplicated request, send cached response
                     if not is_new and stored_response:
                         await exchange.publish(
@@ -231,7 +232,7 @@ async def consume_events(process_message: Callable[[AbstractIncomingMessage], An
 
                     encoded_result = msgpack.encode(result)
 
-                    await idempotency_manager.store_response(message.correlation_id,encoded_result)
+                    idempotency_manager.store_response(message.correlation_id,encoded_result)
 
                     if reply_to is not None and len(reply_to) > 0 and result is not None:
                         await exchange.publish(
