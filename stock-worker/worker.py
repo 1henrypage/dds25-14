@@ -3,10 +3,14 @@ import uuid
 
 import redis
 import asyncio
+import logging
+
+from aio_pika.abc import AbstractIncomingMessage
+from msgspec import msgpack
 
 from common.msg_types import MsgType
 from common.queue_utils import consume_events
-from common.redis_utils import configure_redis
+from common.redis_utils import configure_redis, release_locks, attempt_acquire_locks
 from common.request_utils import create_error_message, create_response_message
 
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
@@ -35,8 +39,13 @@ def batch_init_users(n: int, starting_stock: int, item_price: int):
     stock_kv_pairs: dict[str, int] = {f"user:{i}-stock": starting_stock for i in range(n)}
 
     try:
-        db.mset(price_kv_pairs)
-        db.mset(stock_kv_pairs)
+        with db.pipeline() as pipe:
+            for key, value in price_kv_pairs.items():
+                pipe.set(key, value)
+
+            for key, value in stock_kv_pairs.items():
+                pipe.set(key, value)
+            pipe.execute()
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
@@ -108,15 +117,55 @@ def remove_stock(item_id: str, amount: int):
         is_json=False
     )
 
+def check_and_validate_stock(item_dict: dict[str, int]) :
+    """Validates if there is enough stock for all items in the dictionary."""
+    for item_id, amount in item_dict.items():
+        stock_key = f"{item_id}-stock"
+        current_stock = db.get(stock_key)
+        if current_stock is None or int(current_stock) < amount:
+            return create_error_message(f"Not enough stock for item: {item_id}")
+    # No errors, stock is sufficient
 
-def process_message(message_type, content):
-    """
-    Based on message type it delegates the call to a specific function.
+def update_stock_in_db(item_dict: dict[str, int], operation_func):
+    """Updates stock in the database via pipeline for the specified operation."""
+    try:
+        with db.pipeline() as pipe:
+            for item_id, amount in item_dict.items():
+                operation_func(pipe, f"{item_id}-stock", amount)
+            pipe.execute()
+    except redis.exceptions.RedisError as e:
+        return create_error_message(f"Redis error: {e}")
 
-    :param message_type: The message type
-    :param content: The actual message content
-    :return: Processed response
-    """
+def subtract_bulk(item_dict: dict[str, int]):
+    """Attempts to decrement stock safely while locking only relevant keys."""
+    stock_keys = [f"{item_id}-stock" for item_id in item_dict.keys()]
+    # Attempt to acquire locks
+    if not (acquired_locks := attempt_acquire_locks(db, stock_keys)):
+        return create_error_message("Failed to acquire necessary locks after multiple retries")
+    try:
+        # Fetch current stock levels and check availability
+        if validation_error := check_and_validate_stock(item_dict):
+            return validation_error
+        # If sufficient stock is available, update in a pipeline
+        if updating_error := update_stock_in_db(item_dict, lambda p, k, a: p.decrby(k, a)):
+            return updating_error
+        return create_response_message(content="All items' stock successfully updated for the saga.", is_json=False)
+    finally:
+        release_locks(db, acquired_locks)
+
+def add_bulk(item_dict: dict[str, int]):
+    # Use a pipeline to send multiple INCRBY commands in a batch
+    if updating_error :=update_stock_in_db(item_dict, lambda p, k, a: p.incrby(k, a)):
+        return updating_error
+    return create_response_message(
+        content="Stock successfully restored for the saga reversal.",
+        is_json=False
+    )
+
+async def process_message(message: AbstractIncomingMessage):
+    message_type = message.type
+    content = msgpack.decode(message.body)
+
     if message_type == MsgType.CREATE:
         return create_item(price=content["price"])
     elif message_type == MsgType.BATCH_INIT:
@@ -124,11 +173,26 @@ def process_message(message_type, content):
     elif message_type == MsgType.FIND:
         return find_item(item_id=content["item_id"])
     elif message_type == MsgType.ADD:
-        return add_stock(item_id=content["item_id"], amount=content["amount"])
+        return add_stock(item_id=content["item_id"], amount=content["total_cost"])
     elif message_type == MsgType.SUBTRACT:
-        return remove_stock(item_id=content["item_id"], amount=content["amount"])
+        return remove_stock(item_id=content["item_id"], amount=content["total_cost"])
+    elif message_type == MsgType.SAGA_INIT:
+        return subtract_bulk(item_dict=dict(content["items"]))
+    elif message_type == MsgType.SAGA_STOCK_REVERSE:
+        return add_bulk(item_dict=dict(content["items"]))
+    elif message_type == MsgType.SAGA_PAYMENT_REVERSE:
+        return None # Ignore
 
     return create_error_message(error=f"Unknown message type: {message_type}")
 
+
+def get_message_response_type(message: AbstractIncomingMessage) -> str:
+    if message.type == MsgType.SAGA_INIT:
+        return MsgType.SAGA_STOCK_RESPONSE
+
 if __name__ == "__main__":
-    asyncio.run(consume_events(process_message))
+    asyncio.run(consume_events(
+        process_message=process_message,
+        get_message_response_type=get_message_response_type,
+        get_custom_reply_to=lambda message: None
+    ))

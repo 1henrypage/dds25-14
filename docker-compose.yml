@@ -63,6 +63,7 @@ services:
       - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
       - ROUTE_KEY=order-egress
       - GATEWAY_URL=http://gateway:80
+      - ORDER_OUTBOUND_EXCHANGE_IDENTIFIER=order-outbound
     depends_on:
       cluster-setup:
         condition: service_completed_successfully
@@ -102,6 +103,7 @@ services:
     environment:
       - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
       - ROUTE_KEY=payment-egress
+      - ORDER_OUTBOUND=order-outbound
     depends_on:
       cluster-setup:
         condition: service_completed_successfully
@@ -141,6 +143,7 @@ services:
     environment:
       - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
       - ROUTE_KEY=stock-egress
+      - ORDER_OUTBOUND=order-outbound
     depends_on:
       cluster-setup:
         condition: service_completed_successfully

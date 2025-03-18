@@ -8,10 +8,71 @@ from msgspec import msgpack
 
 from aio_pika import Message, connect_robust, DeliveryMode
 from aio_pika.abc import (
-    AbstractChannel, AbstractConnection, AbstractIncomingMessage, AbstractQueue
+    AbstractChannel, AbstractConnection, AbstractIncomingMessage, AbstractQueue, ExchangeType, AbstractExchange
 )
 
 from common.msg_types import MsgType
+
+
+class OrderWorkerClient:
+    """
+    Client which just inserts stuff into a queue from the order. No response expectation
+    """
+    connection: AbstractConnection
+    channel: AbstractChannel
+    exchange: AbstractExchange
+    rabbitmq_url: str
+    exchange_key: str
+
+    def __init__(self, rabbitmq_url: str, exchange_key: str) -> None:
+        """
+        Initialise the object, but don't connect!
+
+        :param exchange_key: The exchange name or queue name, depending on mode
+        :param rabbitmq_url: The URL of the RabbitMQ server
+        :param publish_to_exchange: Whether to publish to an exchange (True) or a queue (False)
+        """
+        self.rabbitmq_url = rabbitmq_url
+        self.key = exchange_key
+
+    async def connect(self) -> "OrderWorkerClient":
+        """
+        (async) Connects to the RabbitMQ server and creates a channel.
+        """
+        self.connection = await connect_robust(self.rabbitmq_url)
+        self.channel = await self.connection.channel()
+        self.exchange = await self.channel.declare_exchange(
+            self.key, ExchangeType.FANOUT, durable=True
+        )
+        return self
+
+
+    async def order_fanout_call(self, msg: Any, msg_type: MsgType, reply_to: str, correlation_id: str = None):
+        """
+        Forwards a message into a fanout exchange with a correlation id.
+        """
+
+        message = Message(
+            msgpack.encode(msg),
+            content_type="application/msgpack",
+            correlation_id=correlation_id,
+            delivery_mode=DeliveryMode.PERSISTENT,
+            type=msg_type,
+            reply_to=reply_to,
+        )
+
+        await self.exchange.publish(message, routing_key="")  # Routing key ignored for fanout
+
+    async def disconnect(self):
+        """
+        Disconnects the client gracefully
+        """
+        if self.channel:
+            await self.channel.close()
+        if self.connection:
+            await self.connection.close()
+
+
 
 
 class RpcClient:
@@ -33,7 +94,7 @@ class RpcClient:
         """
         Initialise the object, but don't connect!
 
-        :param routing_key: The routing key for the egress queue
+        :param routing_key: The routing key for the ingress queue
         :param rabbitmq_url: The URL of the RabbitMQ server
         """
         self.futures: MutableMapping[str, asyncio.Future] = {}
@@ -59,7 +120,7 @@ class RpcClient:
         :return: Nothing, the future will have a result
         """
         if message.correlation_id is None:
-            logging.error(f"Message doesn't have correlation ID: {message!r}")
+            logging.debug(f"Message doesn't have correlation ID: {message!r}")
             return
 
         future: asyncio.Future = self.futures.pop(message.correlation_id)
@@ -104,9 +165,11 @@ class RpcClient:
             await self.connection.close()  # Close the connection
 
 
-async def consume_events(process_message: Callable[[str, Any], Any]) -> None:
+async def consume_events(process_message: Callable[[AbstractIncomingMessage], Any],
+                         get_message_response_type: Callable[[AbstractIncomingMessage], str | None],
+                         get_custom_reply_to: Callable[[AbstractIncomingMessage], str | None]) -> None:
     """
-    Event loop function which just listens for events in an egress queue. (THIS IS FOR THE WORKER)
+    Event loop function which just listens for events in an ingress queue. (THIS IS FOR THE WORKER)
     This will process messages and forward events in a specific response queue.
 
     :param process_message: Lambda function which should be defined as follows
@@ -120,6 +183,9 @@ async def consume_events(process_message: Callable[[str, Any], Any]) -> None:
     channel = await connection.channel()
     exchange = channel.default_exchange
     queue = await channel.declare_queue(os.environ['ROUTE_KEY'])
+    if "ORDER_OUTBOUND" in os.environ:
+        order_outbound_exchange = await channel.declare_exchange(os.environ['ORDER_OUTBOUND'], ExchangeType.FANOUT, durable=True)
+        await queue.bind(order_outbound_exchange)
 
     async with queue.iterator() as qiterator:
         message: AbstractIncomingMessage
@@ -128,19 +194,22 @@ async def consume_events(process_message: Callable[[str, Any], Any]) -> None:
                 # TODO LOOK AT THE DOCUMENTATION FOR PARAMETERS THAT THIS TAKES
                 # TODO EXPONENTIAL BACKOFF WILL NEED TO BE IMPLEMENTED MANUALLY
                 async with message.process(requeue=False):
-                    assert message.reply_to is not None
-                    message_type = message.type
-                    message_body = msgpack.decode(message.body)
-                    result = process_message(message_type, message_body)
 
-                    await exchange.publish(
-                        Message(
-                            body=msgpack.encode(result),
-                            content_type="application/msgpack",
-                            correlation_id=message.correlation_id,
-                            delivery_mode=DeliveryMode.PERSISTENT,
-                        ),
-                        routing_key=message.reply_to,
-                    )
+                    result = await process_message(message)
+                    reply_to = get_custom_reply_to(message) or message.reply_to
+
+                    if reply_to is not None and len(reply_to) > 0 and result is not None:
+                        await exchange.publish(
+                            Message(
+                                body=msgpack.encode(result),
+                                content_type="application/msgpack",
+                                correlation_id=message.correlation_id,
+                                delivery_mode=DeliveryMode.PERSISTENT,
+                                type=get_message_response_type(message)
+                            ),
+                            routing_key=reply_to,
+                        )
+                    else:
+                        logging.debug(f"Message does not have a reply queue {message!r}")
             except Exception:
                 logging.exception("Processing error for message %r", message)

@@ -1,25 +1,25 @@
 import asyncio
-import logging
 import os
 import random
 import uuid
-from collections import defaultdict
-
+from saga import check_saga_completion
 import redis
-import requests
+from aio_pika.abc import AbstractIncomingMessage
+import aiohttp
 
 from msgspec import msgpack
 
 from common.msg_types import MsgType
-from common.queue_utils import consume_events
+from common.queue_utils import consume_events, OrderWorkerClient
 from common.request_utils import create_response_message, create_error_message
 from common.redis_utils import configure_redis
 from model import OrderValue
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
-
-
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
+order_worker_client: OrderWorkerClient = None
+
+SAGA_TIMEOUT = 30
 
 def get_order_from_db(order_id: str) -> OrderValue | None:
     """
@@ -62,7 +62,10 @@ def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(generate_entry())
                                   for i in range(n)}
     try:
-        db.mset(kv_pairs)
+        with db.pipeline() as pipe:
+            for key, value in kv_pairs.items():
+                pipe.set(key, value)
+            pipe.execute()
     except redis.exceptions.RedisError as e:
         return create_error_message(
             error=str(e)
@@ -93,21 +96,22 @@ def find_order(order_id: str):
     )
 
 
-
-def add_item(order_id: str, item_id: str, quantity: int):
+async def add_item(order_id: str, item_id: str, quantity: int):
     try:
         order_entry: OrderValue = get_order_from_db(order_id)
+        if order_entry is None:
+            return create_error_message(f"Order: {order_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
-    if order_entry is None:
-        return create_error_message(f"Order: {order_id} not found")
 
-    item_reply = requests.get(f"{GATEWAY_URL}/stock/find/{item_id}")
-    if item_reply.status_code != 200:
-        return create_error_message(
-            error = str(f"Item: {item_id} does not exist!")
-        )
-    item_json: dict = item_reply.json()
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f"{GATEWAY_URL}/stock/find/{item_id}") as item_reply:
+            if item_reply.status != 200:
+                return create_error_message(
+                    error=f"Item: {item_id} does not exist!"
+                )
+            item_json: dict = await item_reply.json()
+
     order_entry.items.append((item_id, int(quantity)))
     order_entry.total_cost += int(quantity) * item_json["price"]
     try:
@@ -122,62 +126,36 @@ def add_item(order_id: str, item_id: str, quantity: int):
         is_json=False
     )
 
-def rollback_stock(removed_items: list[tuple[str, int]]):
-    for item_id, quantity in removed_items:
-        requests.post(f"{GATEWAY_URL}/stock/add/{item_id}/{quantity}")
 
-def checkout(order_id: str):
+async def checkout(order_id: str, correlation_id: str, reply_to: str):
     try:
         order_entry: OrderValue = get_order_from_db(order_id)
+        if order_entry is None:
+            return create_error_message(f"Order: {order_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
-    if order_entry is None:
-        return create_error_message(f"Order: {order_id} not found")
-    # get the quantity per item
-    items_quantities: dict[str, int] = defaultdict(int)
-    for item_id, quantity in order_entry.items:
-        items_quantities[item_id] += quantity
-    # The removed items will contain the items that we already have successfully subtracted stock from
-    # for rollback purposes.
-    removed_items: list[tuple[str, int]] = []
-    for item_id, quantity in items_quantities.items():
-        stock_reply = requests.post(f"{GATEWAY_URL}/stock/subtract/{item_id}/{quantity}")
-        if stock_reply.status_code != 200:
-            # If one item does not have enough stock we need to rollback
-            rollback_stock(removed_items)
-            return create_error_message(
-                error = f'Out of stock on item_id: {item_id}'
-            )
-        removed_items.append((item_id, quantity))
-    user_reply = requests.post(f"{GATEWAY_URL}/payment/pay/{order_entry.user_id}/{order_entry.total_cost}")
-    if user_reply.status_code != 200:
-        # If the user does not have enough credit we need to rollback all the item stock subtractions
-        rollback_stock(removed_items)
-        return create_error_message(
-            error = "User out of credit"
-        )
-    order_entry.paid = True
-    try:
-        db.set(order_id, msgpack.encode(order_entry))
-    except redis.exceptions.RedisError as e:
-        return create_error_message(
-            error = str(e)
-        )
 
-    return create_response_message(
-        content = "Checkout successful",
-        is_json=False
+    db.hset(f"saga-{correlation_id}", mapping={'order_id': order_id, 'reply_to': reply_to})
+
+    await order_worker_client.order_fanout_call(
+        msg=order_entry,
+        msg_type=MsgType.SAGA_INIT,
+        correlation_id=correlation_id,
+        reply_to=os.environ['ROUTE_KEY']
     )
 
+async def handle_payment_saga_response(status_code, correlation_id):
+    db.hsetnx(f"saga-{correlation_id}", "payment", "1" if status_code == 200 else "0")
+    return await check_saga_completion(db, order_worker_client, correlation_id)
 
-def process_message(message_type, content):
-    """
-    Based on message type it delegates the call to a specific function.
+async def handle_stock_saga_response(status_code, correlation_id):
+    db.hsetnx(f"saga-{correlation_id}", "stock", "1" if status_code == 200 else "0")
+    return await check_saga_completion(db, order_worker_client, correlation_id)
 
-    :param message_type: The message type
-    :param content: The actual message content
-    :return: Processed response
-    """
+async def process_message(message: AbstractIncomingMessage):
+    message_type = message.type
+    content = msgpack.decode(message.body)
+
     if message_type == MsgType.CREATE:
         return create_order(user_id=content['user_id'])
     elif message_type == MsgType.BATCH_INIT:
@@ -185,14 +163,39 @@ def process_message(message_type, content):
     elif message_type == MsgType.FIND:
         return find_order(order_id=content['order_id'])
     elif message_type == MsgType.ADD:
-        return add_item(order_id=content['order_id'], item_id=content['item_id'], quantity=content['quantity'])
+        return await add_item(order_id=content['order_id'], item_id=content['item_id'], quantity=content['quantity'])
     elif message_type == MsgType.CHECKOUT:
-        return checkout(content['order_id'])
+        return await checkout(content['order_id'], message.correlation_id, reply_to=message.reply_to)
+    elif message_type == MsgType.SAGA_PAYMENT_RESPONSE:
+        return await handle_payment_saga_response(status_code=content['status'], correlation_id=message.correlation_id)
+    elif message_type == MsgType.SAGA_STOCK_RESPONSE:
+        return await handle_stock_saga_response(status_code=content['status'], correlation_id=message.correlation_id)
 
     return create_error_message(
         error = str(f"Unknown message type: {message_type}")
     )
 
+def get_custom_reply_to(message: AbstractIncomingMessage) -> str:
+    if message.type in (MsgType.SAGA_STOCK_RESPONSE, MsgType.SAGA_PAYMENT_RESPONSE):
+        reply_to = db.hget(f"saga-{message.correlation_id}", 'reply_to')
+        reply_to = reply_to.decode('utf-8') if reply_to else None
+        return reply_to
+
+async def main():
+    global order_worker_client
+    order_worker_client = await OrderWorkerClient(
+        rabbitmq_url=os.environ['RABBITMQ_URL'],
+        exchange_key=os.environ['ORDER_OUTBOUND_EXCHANGE_IDENTIFIER']
+    ).connect()
+
+    await consume_events(
+        process_message=process_message,
+        get_message_response_type=lambda message: None,
+        get_custom_reply_to=get_custom_reply_to
+    )
 
 if __name__ == "__main__":
-    asyncio.run(consume_events(process_message=process_message))
+    asyncio.run(main())
+
+
+
