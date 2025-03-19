@@ -27,7 +27,7 @@ def configure_redis(host: str, port: int = 6379) -> redis.RedisCluster:
     return db
 
 def attempt_acquire_locks(db, keys):
-    """Attempts to acquiri e locks on stock keys with retry logic."""
+    """Attempts to acquire locks on stock keys with retry logic."""
     for _ in range(MAX_RETRIES):
         acquired_locks = acquire_locks(db, keys)
         if acquired_locks:

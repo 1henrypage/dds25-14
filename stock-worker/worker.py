@@ -91,6 +91,9 @@ def add_stock(item_id: str, amount: int):
 
 def remove_stock(item_id: str, amount: int):
     key = item_id + "-stock"
+    # Attempt to acquire locks
+    if not (acquired_locks := attempt_acquire_locks(db, [item_id])):
+        return create_error_message("Failed to acquire necessary locks after multiple retries")
     try:
         item_stock = db.get(key)
         if item_stock is None:
@@ -112,10 +115,13 @@ def remove_stock(item_id: str, amount: int):
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-    return create_response_message(
-        content=f"Item: {item_id} stock updated to: {item_stock}",
-        is_json=False
-    )
+    try:
+        return create_response_message(
+            content=f"Item: {item_id} stock updated to: {item_stock}",
+            is_json=False
+        )
+    finally:
+        release_locks(db, [item_id])
 
 def check_and_validate_stock(item_dict: dict[str, int]) :
     """Validates if there is enough stock for all items in the dictionary."""
@@ -151,7 +157,7 @@ def subtract_bulk(item_dict: dict[str, int]):
             return updating_error
         return create_response_message(content="All items' stock successfully updated for the saga.", is_json=False)
     finally:
-        release_locks(db, acquired_locks)
+        release_locks(db, stock_keys)
 
 def add_bulk(item_dict: dict[str, int]):
     # Use a pipeline to send multiple INCRBY commands in a batch

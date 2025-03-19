@@ -9,7 +9,7 @@ from msgspec import msgpack
 from common.msg_types import MsgType
 from common.queue_utils import consume_events
 from common.request_utils import create_response_message, create_error_message
-from common.redis_utils import configure_redis
+from common.redis_utils import configure_redis, release_locks, attempt_acquire_locks
 
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
@@ -78,6 +78,9 @@ def add_credit(user_id: str, amount: int):
 
 
 def remove_credit(user_id: str, amount: int):
+    # Attempt to acquire locks
+    if not (acquired_locks := attempt_acquire_locks(db, [user_id])):
+        return create_error_message("Failed to acquire necessary locks after multiple retries")
     try:
         credit = db.get(user_id)
         if credit is None:
@@ -99,11 +102,13 @@ def remove_credit(user_id: str, amount: int):
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-    return create_response_message(
-        content=f"User: {user_id} credit updated to: {credit}",
-        is_json=False
-    )
-
+    try:
+        return create_response_message(
+            content=f"User: {user_id} credit updated to: {credit}",
+            is_json=False
+        )
+    finally:
+        release_locks(db, [user_id])
 
 async def process_message(message: AbstractIncomingMessage):
     message_type = message.type
