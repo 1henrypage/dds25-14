@@ -3,7 +3,7 @@ import time
 from typing import Optional, Any, Tuple
 
 class IdempotencyManager:
-    def __init__(self, db: redis.RedisCluster, ttl_sec: int = 3600):
+    def __init__(self, db: redis.RedisCluster, ttl_sec: int = 60):
         """
         Initialize with redis connection
         :param redis: redis db instance
