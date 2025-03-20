@@ -91,9 +91,7 @@ def add_stock(item_id: str, amount: int):
 
 def remove_stock(item_id: str, amount: int):
     key = item_id + "-stock"
-    # Attempt to acquire locks
-    if not (acquired_locks := attempt_acquire_locks(db, [item_id])):
-        return create_error_message("Failed to acquire necessary locks after multiple retries")
+
     try:
         item_stock = db.get(key)
         if item_stock is None:
@@ -101,27 +99,25 @@ def remove_stock(item_id: str, amount: int):
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-    item_stock = int(item_stock)
-
-    # update stock, serialize and update database
-    item_stock -= int(amount)
-    if item_stock < 0:
-        return create_error_message(
-            error=f"Item: {item_id} stock cannot get reduced below zero!"
-        )
-
+    # Attempt to acquire locks
+    if not (acquired_locks := attempt_acquire_locks(db, [item_id])):
+        return create_error_message("Failed to acquire necessary locks after multiple retries")
     try:
-        db.set(key, int(item_stock))
-    except redis.exceptions.RedisError as e:
-        return create_error_message(str(e))
+        item_dict = {item_id : int(amount)} # had to typecast because amount was identified as string for some reason
+        # Fetch current stock levels and check availability
+        if validation_error := check_and_validate_stock(item_dict):
+            return validation_error
+        # If sufficient stock is available, update in a pipeline
+        if updating_error := update_stock_in_db(item_dict, lambda p, k, a: p.decrby(k, a)):
+            return updating_error
 
-    try:
         return create_response_message(
-            content=f"Item: {item_id} stock updated to: {item_stock}",
+            content=f"Item: {item_id} stock updated to: {int(db.get(key))}",
             is_json=False
         )
     finally:
         release_locks(db, [item_id])
+
 
 def check_and_validate_stock(item_dict: dict[str, int]) :
     """Validates if there is enough stock for all items in the dictionary."""

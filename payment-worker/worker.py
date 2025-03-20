@@ -76,11 +76,25 @@ def add_credit(user_id: str, amount: int):
         is_json=False
     )
 
+def check_and_validate_user(user_dict: dict[str, int]) :
+    """Validates if there is enough credit for all users in the dictionary."""
+    for user_id, amount in user_dict.items():
+        current_credit = db.get(user_id)
+        if current_credit is None or int(current_credit) < amount:
+            return create_error_message(f"Not enough credit for user: {user_id}")
+    # No errors, user credit is sufficient
+
+def update_credit_in_db(user_dict: dict[str, int], operation_func):
+    """Updates credit in the database via pipeline for the specified operation."""
+    try:
+        with db.pipeline() as pipe:
+            for user_id, amount in user_dict.items():
+                operation_func(pipe, user_id, amount)
+            pipe.execute()
+    except redis.exceptions.RedisError as e:
+        return create_error_message(f"Redis error: {e}")
 
 def remove_credit(user_id: str, amount: int):
-    # Attempt to acquire locks
-    if not (acquired_locks := attempt_acquire_locks(db, [user_id])):
-        return create_error_message("Failed to acquire necessary locks after multiple retries")
     try:
         credit = db.get(user_id)
         if credit is None:
@@ -88,27 +102,24 @@ def remove_credit(user_id: str, amount: int):
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-    credit = int(credit)
-
-    # update credit, serialize and update database
-    credit -= int(amount)
-
-    if credit < 0:
-        return create_error_message(
-            error=f"User: {user_id} credit cannot get reduced below zero!"
-        )
+    # Attempt to acquire locks
+    if not (acquired_locks := attempt_acquire_locks(db, [user_id])):
+        return create_error_message("Failed to acquire necessary locks after multiple retries")
     try:
-        db.set(user_id, credit)
-    except redis.exceptions.RedisError as e:
-        return create_error_message(str(e))
-
-    try:
+        user_dict = {user_id: int(amount)}
+        # Fetch current user credit and check availability
+        if validation_error := check_and_validate_user(user_dict):
+            return validation_error
+        # If sufficient credit is available, update in a pipeline
+        if updating_error := update_credit_in_db(user_dict, lambda p, k, a: p.decrby(k, a)):
+            return updating_error
         return create_response_message(
-            content=f"User: {user_id} credit updated to: {credit}",
+            content=f"User: {user_id} credit updated to: {int(db.get(user_id))}",
             is_json=False
         )
     finally:
         release_locks(db, [user_id])
+
 
 async def process_message(message: AbstractIncomingMessage):
     message_type = message.type
