@@ -214,8 +214,9 @@ async def consume_events(process_message: Callable[[AbstractIncomingMessage], An
                 async with message.process(requeue=False):
 
                     is_new, stored_response = idempotency_manager.check_and_set_request(message.correlation_id)
+                    reply_to = get_custom_reply_to(message) or message.reply_to
                     # duplicated request, send cached response
-                    if not is_new and stored_response:
+                    if not is_new and stored_response and reply_to is not None and len(reply_to) > 0 and result is not None:
                         await exchange.publish(
                             Message(
                                 body=stored_response,
@@ -226,9 +227,10 @@ async def consume_events(process_message: Callable[[AbstractIncomingMessage], An
                             routing_key=message.reply_to,
                         )
                         continue
+                    else:
+                        logging.debug(f"Message does not have a reply queue {message!r}")
 
                     result = await process_message(message)
-                    reply_to = get_custom_reply_to(message) or message.reply_to
 
                     encoded_result = msgpack.encode(result)
 
