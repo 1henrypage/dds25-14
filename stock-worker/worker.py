@@ -10,7 +10,7 @@ from msgspec import msgpack
 
 from common.msg_types import MsgType
 from common.queue_utils import consume_events
-from common.redis_utils import configure_redis, release_locks, attempt_acquire_locks
+from common.redis_utils import configure_redis, release_locks, acquire_locks
 from common.request_utils import create_error_message, create_response_message
 
 db: redis.asyncio.cluster.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
@@ -129,7 +129,7 @@ async def check_and_validate_stock(item_dict: dict[str, int]):
 async def subtract_bulk(item_dict: dict[str, int]):
     """Attempts to decrement stock safely while locking only relevant keys."""
     # Attempt to acquire locks
-    if not (acquired_locks := await attempt_acquire_locks(db, item_dict.keys())):
+    if not (acquired_locks := await acquire_locks(db, item_dict.keys())):
         return create_error_message("Failed to acquire necessary locks after multiple retries")
     try:
         # Fetch current stock levels and check availability
