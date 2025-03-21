@@ -2,7 +2,7 @@ import asyncio
 import uuid
 import os
 import logging
-from typing import MutableMapping, Callable, Any
+from typing import MutableMapping, Callable, Any, Optional
 
 from msgspec import msgpack
 
@@ -10,8 +10,78 @@ from aio_pika import Message, connect_robust, DeliveryMode
 from aio_pika.abc import (
     AbstractChannel, AbstractConnection, AbstractIncomingMessage, AbstractQueue, ExchangeType, AbstractExchange
 )
-
+from aio_pika.exceptions import AMQPError
 from common.msg_types import MsgType
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Retry settings
+BACKOFF_DELAYS = [1, 2, 4, 8, 16]  # Exponential backoff retry delays
+MAX_RETRIES = len(BACKOFF_DELAYS)
+
+
+# Retry decorator
+def with_retry(
+    max_retries: int = MAX_RETRIES,
+    backoff_delays: list[int] = BACKOFF_DELAYS,
+    retryable_exceptions: tuple[type[Exception], ...] = (ConnectionError, AMQPError)
+):
+    """Decorator for retrying async functions with exponential backoff."""
+    def decorator(func: Callable[..., Any]) -> Callable[..., Any]:
+        async def wrapper(*args: Any, **kwargs: Any) -> Any:
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return await func(*args, **kwargs)
+                except retryable_exceptions as e:
+                    last_exception = e
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            f"Attempt {attempt + 1}/{max_retries} failed: {e}. Retrying in {backoff_delays[attempt]}s..."
+                        )
+                        await asyncio.sleep(backoff_delays[attempt])
+                    else:
+                       logger.error(f"All {max_retries} attempts failed. Last error: {e}")
+                       raise last_exception
+        return wrapper
+    return decorator
+
+async def process_message_with_retry(
+    message: AbstractIncomingMessage,
+    process_message: Callable[[AbstractIncomingMessage], Any],
+    exchange: AbstractExchange,
+    get_message_response_type: Callable[[AbstractIncomingMessage], Optional[str]],
+    get_custom_reply_to: Callable[[AbstractIncomingMessage], Optional[str]]
+):
+    """Processes a message with retry logic before forwarding it to a response queue."""
+
+    @with_retry()
+    async def process():
+        async with message.process(requeue=False):  # Ensures message is acknowledged or requeued
+            result = await process_message(message)  # Process the message
+
+            reply_to = get_custom_reply_to(message) or message.reply_to  # Get reply address
+
+            if reply_to and result is not None:
+                await exchange.publish(
+                    Message(
+                        body=msgpack.encode(result),
+                        content_type="application/msgpack",
+                        correlation_id=message.correlation_id,
+                        delivery_mode=DeliveryMode.PERSISTENT,
+                        type=get_message_response_type(message),
+                    ),
+                    routing_key=reply_to,
+                )
+            else:
+                logger.warning(f"Message does not have a reply queue: {message!r}")
+
+    try:
+        await process()
+    except Exception as e:
+        logger.error(f"Failed to process message after retries: {e}")
 
 
 class OrderWorkerClient:
@@ -34,7 +104,11 @@ class OrderWorkerClient:
         """
         self.rabbitmq_url = rabbitmq_url
         self.key = exchange_key
+        self.connection = None
+        self.channel = None
+        self.exchange = None
 
+    @with_retry()
     async def connect(self) -> "OrderWorkerClient":
         """
         (async) Connects to the RabbitMQ server and creates a channel.
@@ -46,7 +120,7 @@ class OrderWorkerClient:
         )
         return self
 
-
+    @with_retry()
     async def order_fanout_call(self, msg: Any, msg_type: MsgType, reply_to: str, correlation_id: str = None):
         """
         Forwards a message into a fanout exchange with a correlation id.
@@ -55,7 +129,7 @@ class OrderWorkerClient:
         message = Message(
             msgpack.encode(msg),
             content_type="application/msgpack",
-            correlation_id=correlation_id,
+            correlation_id=correlation_id or str(uuid.uuid4()),
             delivery_mode=DeliveryMode.PERSISTENT,
             type=msg_type,
             reply_to=reply_to,
@@ -101,8 +175,12 @@ class RpcClient:
         self.futures: MutableMapping[str, asyncio.Future] = {}
         self.rabbitmq_url = rabbitmq_url
         self.routing_key = routing_key
+        self.connection = None
+        self.channel = None
+        self.callback_queue = None
         self.online = False
 
+    @with_retry()
     async def connect(self) -> "RpcClient":
         """
         (async) Connects to the RabbitMQ server and creates a channel as well as a callback queue.
@@ -127,12 +205,14 @@ class RpcClient:
             return
 
         future: asyncio.Future = self.futures.pop(message.correlation_id)
-        future.set_result(message.body)
+        if future:
+            future.set_result(message.body)
+            await message.ack()
 
-    async def call(self, msg: Any, msg_type: MsgType):
+    @with_retry()
+    async def call(self, msg: Any, msg_type: MsgType, timeout: float = 30.0):
         """
-        Forwards a message into a queue with a correlation id and asynchronously
-        listens for a response.
+        Forwards a message into a queue with a correlation id and waits for a response.
 
         :param msg: The message to forward
         :param msg_type: The type of message to forward
@@ -144,22 +224,28 @@ class RpcClient:
 
         correlation_id = str(uuid.uuid4())
         future = asyncio.get_running_loop().create_future()
-
         self.futures[correlation_id] = future
 
-        await self.channel.default_exchange.publish(
-            Message(
-                msgpack.encode(msg),
-                content_type="application/msgpack",
-                correlation_id=correlation_id,
-                delivery_mode=DeliveryMode.PERSISTENT,
-                reply_to=self.callback_queue.name,
-                type=msg_type,
-            ),
-            routing_key=self.routing_key,
+        message = Message(
+            msgpack.encode(msg),
+            content_type="application/msgpack",
+            correlation_id=correlation_id,
+            delivery_mode=DeliveryMode.PERSISTENT,
+            reply_to=self.callback_queue.name,
+            type=msg_type,
         )
 
-        return await future
+        await self.channel.default_exchange.publish(
+            message,
+            routing_key=self.routing_key,
+            mandatory=True,
+        )
+
+        try:
+            return await asyncio.wait_for(future, timeout)
+        except asyncio.TimeoutError:
+            del self.futures[correlation_id]
+            raise TimeoutError(f"RPC call timed out after {timeout} seconds.")
 
     async def disconnect(self):
         """
@@ -177,51 +263,39 @@ class RpcClient:
             await self.connection.close()  # Close the connection
 
 
-async def consume_events(process_message: Callable[[AbstractIncomingMessage], Any],
-                         get_message_response_type: Callable[[AbstractIncomingMessage], str | None],
-                         get_custom_reply_to: Callable[[AbstractIncomingMessage], str | None]) -> None:
-    """
-    Event loop function which just listens for events in an ingress queue. (THIS IS FOR THE WORKER)
-    This will process messages and forward events in a specific response queue.
+async def consume_events(
+    process_message: Callable[[AbstractIncomingMessage], Any],
+    get_message_response_type: Callable[[AbstractIncomingMessage], Optional[str]],
+    get_custom_reply_to: Callable[[AbstractIncomingMessage], Optional[str]]
+):
+    """Consumer loop with automatic reconnection."""
 
-    :param process_message: Lambda function which should be defined as follows
-    input: (message_type: str, content: idk)
-    return wrapped_response
-    you can see examples of this at the bottom of each worker.py file.
-    :return: Nothing
-    """
-    # Perform connection
-    connection = await connect_robust(os.environ['RABBITMQ_URL'])
-    channel = await connection.channel()
-    exchange = channel.default_exchange
-    queue = await channel.declare_queue(os.environ['ROUTE_KEY'])
-    if "ORDER_OUTBOUND" in os.environ:
-        order_outbound_exchange = await channel.declare_exchange(os.environ['ORDER_OUTBOUND'], ExchangeType.FANOUT, durable=True)
-        await queue.bind(order_outbound_exchange)
-
-    async with queue.iterator() as qiterator:
-        message: AbstractIncomingMessage
-        async for message in qiterator:
+    async def setup_connection():
+        """Handles RabbitMQ connection setup and reconnection."""
+        while True:
             try:
-                # TODO LOOK AT THE DOCUMENTATION FOR PARAMETERS THAT THIS TAKES
-                # TODO EXPONENTIAL BACKOFF WILL NEED TO BE IMPLEMENTED MANUALLY
-                async with message.process(requeue=False):
+                logger.info("Connecting to RabbitMQ...")
+                connection = await connect_robust(os.environ['RABBITMQ_URL'])
+                channel = await connection.channel()
+                exchange = channel.default_exchange
+                queue = await channel.declare_queue(os.environ['ROUTE_KEY'], durable=True)
+                if "ORDER_OUTBOUND" in os.environ:
+                    order_outbound_exchange = await channel.declare_exchange(os.environ['ORDER_OUTBOUND'], ExchangeType.FANOUT, durable=True)
+                    await queue.bind(order_outbound_exchange)
+                
+                logger.info("Connected to RabbitMQ successfully.")
+                return connection, channel, exchange, queue
+            except (AMQPError, ConnectionError) as e:
+                logger.error(f"RabbitMQ connection failed: {e}. Retrying in 5s...")
+                await asyncio.sleep(5)
 
-                    result = await process_message(message)
-                    reply_to = get_custom_reply_to(message) or message.reply_to
-
-                    if reply_to is not None and len(reply_to) > 0 and result is not None:
-                        await exchange.publish(
-                            Message(
-                                body=msgpack.encode(result),
-                                content_type="application/msgpack",
-                                correlation_id=message.correlation_id,
-                                delivery_mode=DeliveryMode.PERSISTENT,
-                                type=get_message_response_type(message)
-                            ),
-                            routing_key=reply_to,
-                        )
-                    else:
-                        logging.debug(f"Message does not have a reply queue {message!r}")
-            except Exception:
-                logging.exception("Processing error for message %r", message)
+    while True:
+        connection, channel, exchange, queue = await setup_connection()
+        async with queue.iterator() as qiterator:
+            async for message in qiterator:
+                try:
+                    await process_message_with_retry(
+                        message, process_message, exchange, get_message_response_type, get_custom_reply_to
+                    )
+                except Exception as e:
+                    logger.error(f"Error processing message: {e}")
