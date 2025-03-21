@@ -203,14 +203,22 @@ async def consume_events(process_message: Callable[[AbstractIncomingMessage], An
         message: AbstractIncomingMessage
         async for message in qiterator:
             try:
-                # TODO LOOK AT THE DOCUMENTATION FOR PARAMETERS THAT THIS TAKES
-                # TODO EXPONENTIAL BACKOFF WILL NEED TO BE IMPLEMENTED MANUALLY
-                async with message.process(requeue=False):
-
+                # If we start processing this and the worker dies, the message is lost
+                # For the actual implementation look here: https://github.com/mosquito/aio-pika/blob/master/aio_pika/message.py#L538
+                # Parameters:
+                #     requeue – Requeue message when exception
+                #           -> True. If worker dies we want someone else to handle the message.
+                #     reject_on_redelivered – When True message will be rejected only when message was redelivered
+                #           -> False. If worker dies we want someone else to handle the message and not reject it.
+                #     ignore_processed – Do nothing if message already processed (ack, nack, reject has been sent)
+                #           -> True. We don't want to reprocess messages that we have already acknowledged.
+                #               Also, set to True if u want to manually ack, nack or reject messages, which will be helpful for setting up the idempotency mechanism.
+                # We will use idempotency keys to ensure that messages that were processed but not acknowledged are not reprocessed.
+                async with message.process(requeue=True, reject_on_redelivered=False, ignore_processed=True):
                     result = await process_message(message)
                     reply_to = await get_custom_reply_to(message) or message.reply_to
 
-                    if reply_to is not None and len(reply_to) > 0 and result is not None:
+                    if reply_to and result is not None:
                         await exchange.publish(
                             Message(
                                 body=msgpack.encode(result),

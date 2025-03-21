@@ -167,6 +167,11 @@ async def process_message(message: AbstractIncomingMessage):
     message_type = message.type
     content = msgpack.decode(message.body)
 
+    # TODO: If processed, send an acknowledgement but don't process again.
+    processed = False  # TODO: Idempotency issue!
+    if processed:
+        return None  # TODO: get result from db
+
     if message_type == MsgType.CREATE:
         return await create_item(price=content["price"])
     elif message_type == MsgType.BATCH_INIT:
