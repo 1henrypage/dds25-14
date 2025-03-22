@@ -59,6 +59,7 @@ class OrderWorkerClient:
             delivery_mode=DeliveryMode.PERSISTENT,
             type=msg_type,
             reply_to=reply_to,
+            priority=msg_type.priority()
         )
 
         await self.exchange.publish(message, routing_key="")  # Routing key ignored for fanout
@@ -178,7 +179,7 @@ class RpcClient:
 
 
 async def consume_events(process_message: Callable[[AbstractIncomingMessage], Any],
-                         get_message_response_type: Callable[[AbstractIncomingMessage], str | None],
+                         get_message_response_type: Callable[[AbstractIncomingMessage], MsgType | None],
                          get_custom_reply_to: Callable[[AbstractIncomingMessage], str | None]) -> None:
     """
     Event loop function which just listens for events in an ingress queue. (THIS IS FOR THE WORKER)
@@ -210,14 +211,16 @@ async def consume_events(process_message: Callable[[AbstractIncomingMessage], An
                     result = await process_message(message)
                     reply_to = get_custom_reply_to(message) or message.reply_to
 
-                    if reply_to is not None and len(reply_to) > 0 and result is not None:
+                    if reply_to and result is not None:
+                        msg_type = get_message_response_type(message)
                         await exchange.publish(
                             Message(
                                 body=msgpack.encode(result),
                                 content_type="application/msgpack",
                                 correlation_id=message.correlation_id,
                                 delivery_mode=DeliveryMode.PERSISTENT,
-                                type=get_message_response_type(message)
+                                type=msg_type,
+                                priority= msg_type.priority() if msg_type else 0
                             ),
                             routing_key=reply_to,
                         )

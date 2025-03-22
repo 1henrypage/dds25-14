@@ -188,7 +188,7 @@ async def process_message(message: AbstractIncomingMessage):
     return create_error_message(error=f"Unknown message type: {message_type}")
 
 
-def get_message_response_type(message: AbstractIncomingMessage) -> str:
+def get_message_response_type(message: AbstractIncomingMessage) -> MsgType:
     if message.type == MsgType.SAGA_INIT:
         return MsgType.SAGA_STOCK_RESPONSE
 
