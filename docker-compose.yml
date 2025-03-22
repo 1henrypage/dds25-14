@@ -56,7 +56,6 @@ services:
   order-worker:
     build: ./order-worker
     image: order-worker:latest
-    container_name: order-worker
     env_file:
       - env/order_redis.env
     environment:
@@ -75,6 +74,10 @@ services:
       - order-net
     volumes:
       - ./common:/home/common
+    deploy:
+      replicas: 5
+      restart_policy:
+        condition: on-failure
 
   payment-publisher:
     build: ./payment-publisher
@@ -97,7 +100,6 @@ services:
   payment-worker:
     build: ./payment-worker
     image: payment-worker:latest
-    container_name: payment-worker
     env_file:
       - env/payment_redis.env
     environment:
@@ -115,6 +117,10 @@ services:
       - payment-net
     volumes:
       - ./common:/home/common
+    deploy:
+      replicas: 5
+      restart_policy:
+        condition: on-failure
 
   stock-publisher:
     build: ./stock-publisher
@@ -137,7 +143,6 @@ services:
   stock-worker:
     build: ./stock-worker
     image: stock-worker:latest
-    container_name: stock-worker
     env_file:
       - env/stock_redis.env
     environment:
@@ -155,6 +160,10 @@ services:
       - stock-net
     volumes:
       - ./common:/home/common
+    deploy:
+      replicas: 5
+      restart_policy:
+        condition: on-failure
 
   order-master-1:
     image: redis:7.4.2
@@ -283,6 +292,27 @@ services:
     command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes"]
     networks:
       - stock-net
+
+
+  scale-workers:
+    build: ./scripts/scale-workers
+    image: scale-workers:latest
+    container_name: scale-workers
+    restart: always
+    environment:
+      - RABBITMQ_USER=user
+      - RABBITMQ_PASS=pass
+      - RABBITMQ_HOST=rabbitmq
+      - RABBITMQ_API_PORT=15672
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - order-net
+      - stock-net
+      - payment-net
 
   cluster-setup:
     build: ./scripts/setup-db

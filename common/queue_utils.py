@@ -126,6 +126,10 @@ class RpcClient:
             logging.debug(f"Message doesn't have correlation ID: {message!r}")
             return
 
+        if message.correlation_id not in self.futures:
+            logging.debug(f"Message has correlation id, but scaling out made something weird happen")
+            return
+
         future: asyncio.Future = self.futures.pop(message.correlation_id)
         future.set_result(message.body)
 
