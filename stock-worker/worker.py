@@ -19,7 +19,7 @@ db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(o
 IDEMPOTENCY_EXPIRY = 60  # 1 minute
 
 # Idempotency key prefix in Redis
-IDEMPOTENCY_PREFIX = "idempotency:order:"
+IDEMPOTENCY_PREFIX = "idempotency:stock:"
 
 def is_duplicate_message(correlation_id: str,message_type: str) -> bool:
     """
