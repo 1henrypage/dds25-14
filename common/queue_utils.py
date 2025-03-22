@@ -42,7 +42,7 @@ class OrderWorkerClient:
         self.connection = await connect_robust(self.rabbitmq_url)
         self.channel = await self.connection.channel()
         self.exchange = await self.channel.declare_exchange(
-            self.key, ExchangeType.FANOUT, durable=True, arguments={"x-max-priority": 2}
+            self.key, ExchangeType.FANOUT, durable=True, arguments={"x-max-priority": 1}
         )
         return self
 
@@ -111,7 +111,7 @@ class RpcClient:
         """
         self.connection = await connect_robust(self.rabbitmq_url)
         self.channel = await self.connection.channel()
-        self.callback_queue = await self.channel.declare_queue(exclusive=True, arguments={"x-max-priority": 2})
+        self.callback_queue = await self.channel.declare_queue(exclusive=True, arguments={"x-max-priority": 1})
         await self.callback_queue.consume(self.on_response, no_ack=True)
         self.online = True
         return self
@@ -220,7 +220,7 @@ async def consume_events(process_message: Callable[[AbstractIncomingMessage], An
                                 correlation_id=message.correlation_id,
                                 delivery_mode=DeliveryMode.PERSISTENT,
                                 type=msg_type,
-                                priority= msg_type.priority() if msg_type else 1,
+                                priority= msg_type.priority() if msg_type else 0,
                             ),
                             routing_key=reply_to,
                         )
