@@ -156,11 +156,6 @@ async def process_message(message: AbstractIncomingMessage):
     message_type = message.type
     content = msgpack.decode(message.body)
 
-    # TODO: If processed, send an acknowledgement but don't process again.
-    processed = False  # TODO: Idempotency issue!
-    if processed:
-        return None  # TODO: get result from db
-
     if message_type == MsgType.CREATE:
         return await create_order(user_id=content['user_id'])
     elif message_type == MsgType.BATCH_INIT:
@@ -194,6 +189,7 @@ async def main():
     ).connect()
 
     await consume_events(
+        db=db,
         process_message=process_message,
         get_message_response_type=lambda message: None,
         get_custom_reply_to=get_custom_reply_to
