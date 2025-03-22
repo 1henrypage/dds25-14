@@ -11,12 +11,12 @@ from common.queue_utils import consume_events
 from common.request_utils import create_response_message, create_error_message
 from common.redis_utils import configure_redis
 
-db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
+db: redis.asyncio.cluster.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
-def create_user():
+async def create_user():
     key: str = str(uuid.uuid4())
     try:
-        db.set(key, 0)
+        await db.set(key, 0)
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
     return create_response_message(
@@ -24,15 +24,15 @@ def create_user():
         is_json=True
     )
 
-def batch_init_users(n: int, starting_money: int):
+async def batch_init_users(n: int, starting_money: int):
     n = int(n)
     starting_money = int(starting_money)
     kv_pairs: dict[str, int] = {f"{i}": starting_money for i in range(n)}
     try:
-        with db.pipeline() as pipe:
+        async with db.pipeline() as pipe:
             for key, value in kv_pairs.items():
                 pipe.set(key, value)
-            pipe.execute()
+            await pipe.execute()
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
     return create_response_message(
@@ -40,9 +40,9 @@ def batch_init_users(n: int, starting_money: int):
         is_json=True
     )
 
-def find_user(user_id: str):
+async def find_user(user_id: str):
     try:
-        credit = db.get(user_id)
+        credit = await db.get(user_id)
         if credit is None:
             return create_error_message(f"User: {user_id} not found")
     except redis.exceptions.RedisError as e:
@@ -58,16 +58,16 @@ def find_user(user_id: str):
         is_json=True
     )
 
-def add_credit(user_id: str, amount: int):
+async def add_credit(user_id: str, amount: int):
     try:
-        if not db.exists(user_id):
+        if not await db.exists(user_id):
             return create_error_message(f"User: {user_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
     # update credit, serialize and update database
     try:
-        new_balance = db.incrby(user_id,amount=amount)
+        new_balance = await db.incrby(user_id,amount=amount)
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
@@ -77,9 +77,9 @@ def add_credit(user_id: str, amount: int):
     )
 
 
-def remove_credit(user_id: str, amount: int):
+async def remove_credit(user_id: str, amount: int):
     try:
-        credit = db.get(user_id)
+        credit = await db.get(user_id)
         if credit is None:
             return create_error_message(f"User: {user_id} not found")
     except redis.exceptions.RedisError as e:
@@ -95,7 +95,7 @@ def remove_credit(user_id: str, amount: int):
             error=f"User: {user_id} credit cannot get reduced below zero!"
         )
     try:
-        db.set(user_id, credit)
+        await db.set(user_id, credit)
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
@@ -110,20 +110,20 @@ async def process_message(message: AbstractIncomingMessage):
     content = msgpack.decode(message.body)
 
     if message_type == MsgType.CREATE:
-        return create_user()
+        return await create_user()
     elif message_type == MsgType.BATCH_INIT:
-        return batch_init_users(
+        return await batch_init_users(
             n=content['n'],
             starting_money=content['starting_money']
         )
     elif message_type == MsgType.FIND:
-        return find_user(user_id=content['user_id'])
+        return await find_user(user_id=content['user_id'])
     elif message_type in (MsgType.ADD, MsgType.SAGA_PAYMENT_REVERSE):
-        return add_credit(user_id=content['user_id'], amount=content["total_cost"])
+        return await add_credit(user_id=content['user_id'], amount=content["total_cost"])
     elif message_type == MsgType.SUBTRACT:
-        return remove_credit(user_id=content['user_id'], amount=content["total_cost"])
+        return await remove_credit(user_id=content['user_id'], amount=content["total_cost"])
     elif message_type == MsgType.SAGA_INIT:
-        return remove_credit(user_id=content['user_id'], amount=content['total_cost'])
+        return await remove_credit(user_id=content['user_id'], amount=content['total_cost'])
     elif message_type == MsgType.SAGA_STOCK_REVERSE:
         return None # Ignore
 
@@ -135,9 +135,12 @@ def get_message_response_type(message: AbstractIncomingMessage) -> str:
     if message.type == MsgType.SAGA_INIT:
         return MsgType.SAGA_PAYMENT_RESPONSE
 
+async def get_custom_reply_to(message: AbstractIncomingMessage) -> str:
+    return None
+
 if __name__ == "__main__":
     asyncio.run(consume_events(
         process_message=process_message,
         get_message_response_type=get_message_response_type,
-        get_custom_reply_to=lambda message: None
+        get_custom_reply_to=get_custom_reply_to
     ))
