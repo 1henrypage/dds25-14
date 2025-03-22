@@ -2,6 +2,7 @@ import asyncio
 import os
 import random
 import uuid
+import time
 from saga import check_saga_completion
 import redis
 from aio_pika.abc import AbstractIncomingMessage
@@ -20,6 +21,31 @@ db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(o
 order_worker_client: OrderWorkerClient = None
 
 SAGA_TIMEOUT = 30
+# Set expiration time for idempotency keys (in seconds)
+IDEMPOTENCY_EXPIRY = 60  # 1 minute
+
+# Idempotency key prefix in Redis
+IDEMPOTENCY_PREFIX = "idempotency:order:"
+
+def is_duplicate_message(correlation_id: str,message_type: str) -> bool:
+    """
+    Check if a message has been processed before using correlation_id
+    
+    :param correlation_id: The unique correlation ID for the message
+    :return: True if the message has been processed before, False otherwise
+    """
+    # Skip idempotency check if correlation_id is not provided
+    if not correlation_id:
+        return False
+        
+    # Use correlation_id as the key
+    idempotency_key = f"{IDEMPOTENCY_PREFIX}{correlation_id}:{message_type}"
+    
+    # Try to set the key with NX option (only if it doesn't exist)
+    result = db.set(idempotency_key, "1", nx=True, ex=IDEMPOTENCY_EXPIRY)
+    
+    # If result is None, the key already exists (duplicate message)
+    return result is None
 
 def get_order_from_db(order_id: str) -> OrderValue | None:
     """
@@ -153,7 +179,18 @@ async def handle_stock_saga_response(status_code, correlation_id):
     return await check_saga_completion(db, order_worker_client, correlation_id)
 
 async def process_message(message: AbstractIncomingMessage):
+    # Check for idempotency based on the correlation ID
+    correlation_id = message.correlation_id
     message_type = message.type
+    
+    # Skip processing if this is a duplicate message
+    if correlation_id and is_duplicate_message(correlation_id, message_type):
+        print(f"Skipping duplicate message with correlation ID: {correlation_id}")
+        return create_response_message(
+            content={"status": "skipped", "reason": "duplicate_message"},
+            is_json=True
+        )
+    
     content = msgpack.decode(message.body)
 
     if message_type == MsgType.CREATE:

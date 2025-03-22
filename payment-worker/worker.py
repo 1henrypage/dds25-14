@@ -13,6 +13,32 @@ from common.redis_utils import configure_redis
 
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
+# Set expiration time for idempotency keys (in seconds)
+IDEMPOTENCY_EXPIRY = 60  # 1 minute
+
+# Idempotency key prefix in Redis
+IDEMPOTENCY_PREFIX = "idempotency:order:"
+
+def is_duplicate_message(correlation_id: str,message_type: str) -> bool:
+    """
+    Check if a message has been processed before using correlation_id
+    
+    :param correlation_id: The unique correlation ID for the message
+    :return: True if the message has been processed before, False otherwise
+    """
+    # Skip idempotency check if correlation_id is not provided
+    if not correlation_id:
+        return False
+        
+    # Use correlation_id as the key
+    idempotency_key = f"{IDEMPOTENCY_PREFIX}{correlation_id}:{message_type}"
+    
+    # Try to set the key with NX option (only if it doesn't exist)
+    result = db.set(idempotency_key, "1", nx=True, ex=IDEMPOTENCY_EXPIRY)
+    
+    # If result is None, the key already exists (duplicate message)
+    return result is None
+
 def create_user():
     key: str = str(uuid.uuid4())
     try:
@@ -106,7 +132,19 @@ def remove_credit(user_id: str, amount: int):
 
 
 async def process_message(message: AbstractIncomingMessage):
+    
+    # Check for idempotency based on the correlation ID
+    correlation_id = message.correlation_id
     message_type = message.type
+    
+    # Skip processing if this is a duplicate message
+    if correlation_id and is_duplicate_message(correlation_id, message_type):
+        print(f"Skipping duplicate message with correlation ID: {correlation_id}")
+        return create_response_message(
+            content={"status": "skipped", "reason": "duplicate_message"},
+            is_json=True
+        )
+    
     content = msgpack.decode(message.body)
 
     if message_type == MsgType.CREATE:
