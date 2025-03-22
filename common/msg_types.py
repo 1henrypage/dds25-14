@@ -23,3 +23,9 @@ class MsgType(str, Enum):
     def __str__(self):
         return self.value
 
+    def priority(self):
+        if self in (MsgType.SAGA_PAYMENT_RESPONSE, MsgType.SAGA_STOCK_RESPONSE,
+                    MsgType.SAGA_INIT, MsgType.SAGA_PAYMENT_REVERSE, MsgType.SAGA_STOCK_REVERSE):
+            return 1
+        return 0
+
