@@ -18,26 +18,26 @@ from common.idempotency_utils import is_duplicate_message, cache_response
 from model import OrderValue
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
-db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
+db: redis.asyncio.cluster.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 order_worker_client: OrderWorkerClient = None
 
 SAGA_TIMEOUT = 30
 
-def get_order_from_db(order_id: str) -> OrderValue | None:
+async def get_order_from_db(order_id: str) -> OrderValue | None:
     """
     Gets an order from DB via id. Is NONE, if it doesn't exist
 
     :param order_id: The order ID
     :return: The order as a `OrderValue` object, none if it doesn't exist
     """
-    entry: bytes = db.get(order_id)
+    entry: bytes = await db.get(order_id)
     return msgpack.decode(entry, type=OrderValue) if entry else None
 
-def create_order(user_id: str):
+async def create_order(user_id: str):
     key = str(uuid.uuid4())
     value = msgpack.encode(OrderValue(paid=False, items=[], user_id=user_id, total_cost=0))
     try:
-        db.set(key, value)
+        await db.set(key, value)
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
     return create_response_message(
@@ -45,7 +45,7 @@ def create_order(user_id: str):
         is_json=True
     )
 
-def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
+async def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
     n = int(n)
     n_items = int(n_items)
     n_users = int(n_users)
@@ -64,10 +64,10 @@ def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
     kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(generate_entry())
                                   for i in range(n)}
     try:
-        with db.pipeline() as pipe:
+        async with db.pipeline() as pipe:
             for key, value in kv_pairs.items():
                 pipe.set(key, value)
-            pipe.execute()
+            await pipe.execute()
     except redis.exceptions.RedisError as e:
         return create_error_message(
             error=str(e)
@@ -78,9 +78,9 @@ def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
         is_json=True
     )
 
-def find_order(order_id: str):
+async def find_order(order_id: str):
     try:
-        order_entry: OrderValue = get_order_from_db(order_id)
+        order_entry: OrderValue = await get_order_from_db(order_id)
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
     if order_entry is None:
@@ -100,7 +100,7 @@ def find_order(order_id: str):
 
 async def add_item(order_id: str, item_id: str, quantity: int):
     try:
-        order_entry: OrderValue = get_order_from_db(order_id)
+        order_entry: OrderValue = await get_order_from_db(order_id)
         if order_entry is None:
             return create_error_message(f"Order: {order_id} not found")
     except redis.exceptions.RedisError as e:
@@ -117,7 +117,7 @@ async def add_item(order_id: str, item_id: str, quantity: int):
     order_entry.items.append((item_id, int(quantity)))
     order_entry.total_cost += int(quantity) * item_json["price"]
     try:
-        db.set(order_id, msgpack.encode(order_entry))
+        await db.set(order_id, msgpack.encode(order_entry))
     except redis.exceptions.RedisError as e:
         return create_error_message(
             error = str(e)
@@ -131,13 +131,13 @@ async def add_item(order_id: str, item_id: str, quantity: int):
 
 async def checkout(order_id: str, correlation_id: str, reply_to: str):
     try:
-        order_entry: OrderValue = get_order_from_db(order_id)
+        order_entry: OrderValue = await get_order_from_db(order_id)
         if order_entry is None:
             return create_error_message(f"Order: {order_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-    db.hset(f"saga-{correlation_id}", mapping={'order_id': order_id, 'reply_to': reply_to})
+    await db.hset(f"saga-{correlation_id}", mapping={'order_id': order_id, 'reply_to': reply_to})
 
     await order_worker_client.order_fanout_call(
         msg=order_entry,
@@ -147,11 +147,11 @@ async def checkout(order_id: str, correlation_id: str, reply_to: str):
     )
 
 async def handle_payment_saga_response(status_code, correlation_id):
-    db.hsetnx(f"saga-{correlation_id}", "payment", "1" if status_code == 200 else "0")
+    await db.hsetnx(f"saga-{correlation_id}", "payment", "1" if status_code == 200 else "0")
     return await check_saga_completion(db, order_worker_client, correlation_id)
 
 async def handle_stock_saga_response(status_code, correlation_id):
-    db.hsetnx(f"saga-{correlation_id}", "stock", "1" if status_code == 200 else "0")
+    await db.hsetnx(f"saga-{correlation_id}", "stock", "1" if status_code == 200 else "0")
     return await check_saga_completion(db, order_worker_client, correlation_id)
 
 async def process_message(message: AbstractIncomingMessage):
@@ -175,11 +175,11 @@ async def process_message(message: AbstractIncomingMessage):
 
     # Process the message based on its type
     if message_type == MsgType.CREATE:
-        response = create_order(user_id=content['user_id'])
+        response = await create_order(user_id=content['user_id'])
     elif message_type == MsgType.BATCH_INIT:
-        response = batch_init_users(n=content['n'], n_items=content['n_items'], n_users=content['n_users'], item_price=content['item_price'])
+        response = await batch_init_users(n=content['n'], n_items=content['n_items'], n_users=content['n_users'], item_price=content['item_price'])
     elif message_type == MsgType.FIND:
-        response = find_order(order_id=content['order_id'])
+        response = await find_order(order_id=content['order_id'])
     elif message_type == MsgType.ADD:
         response = await add_item(order_id=content['order_id'], item_id=content['item_id'], quantity=content['quantity'])
     elif message_type == MsgType.CHECKOUT:
@@ -197,9 +197,9 @@ async def process_message(message: AbstractIncomingMessage):
     
     return response
 
-def get_custom_reply_to(message: AbstractIncomingMessage) -> str:
+async def get_custom_reply_to(message: AbstractIncomingMessage) -> str:
     if message.type in (MsgType.SAGA_STOCK_RESPONSE, MsgType.SAGA_PAYMENT_RESPONSE):
-        reply_to = db.hget(f"saga-{message.correlation_id}", 'reply_to')
+        reply_to = await db.hget(f"saga-{message.correlation_id}", 'reply_to')
         reply_to = reply_to.decode('utf-8') if reply_to else None
         return reply_to
 
