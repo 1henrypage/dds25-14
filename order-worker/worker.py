@@ -160,7 +160,7 @@ async def process_message(message: AbstractIncomingMessage):
     message_type = message.type
     
     # Skip processing if this is a duplicate message
-    is_duplicate, cached_response = is_duplicate_message(db, correlation_id, message_type)
+    is_duplicate, cached_response = await is_duplicate_message(db, correlation_id, message_type)
     if is_duplicate:
         if cached_response:
             return cached_response
@@ -193,7 +193,7 @@ async def process_message(message: AbstractIncomingMessage):
     
     # Cache the response if we have a correlation ID
     if correlation_id and response:
-        cache_response(db, correlation_id, message_type, response)
+        await cache_response(db, correlation_id, message_type, response)
     
     return response
 

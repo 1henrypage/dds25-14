@@ -3,7 +3,7 @@ from msgspec import msgpack
 
 IDEMPOTENCY_EXPIRY = 60  # seconds
 
-def is_duplicate_message(db: redis.RedisCluster, correlation_id: str, message_type: str) -> tuple[bool, dict]:
+async def is_duplicate_message(db: redis.asyncio.cluster.RedisCluster, correlation_id: str, message_type: str) -> tuple[bool, dict]:
     """
     Check if a message has been processed before using correlation_id
     
@@ -17,7 +17,7 @@ def is_duplicate_message(db: redis.RedisCluster, correlation_id: str, message_ty
         
     idempotency_key = f"{correlation_id}:{message_type}"
     
-    cached_value = db.get(idempotency_key)
+    cached_value = await db.get(idempotency_key)
     
     if cached_value:
         try:
@@ -29,7 +29,7 @@ def is_duplicate_message(db: redis.RedisCluster, correlation_id: str, message_ty
     # Message hasn't been processed before
     return False, None
 
-def cache_response(db: redis.RedisCluster, correlation_id: str, message_type: str, response: dict):
+async def cache_response(db: redis.asyncio.cluster.RedisCluster, correlation_id: str, message_type: str, response: dict):
     """
     Cache the response for a given correlation ID and message type
     
@@ -44,7 +44,7 @@ def cache_response(db: redis.RedisCluster, correlation_id: str, message_type: st
     idempotency_key = f"{correlation_id}:{message_type}"
     
     try:
-        db.set(idempotency_key, msgpack.encode(response), ex=IDEMPOTENCY_EXPIRY)
+        await db.set(idempotency_key, msgpack.encode(response), ex=IDEMPOTENCY_EXPIRY)
     except Exception as e:
         # If caching fails, log but continue - it's not critical
         print(f"Failed to cache response for {correlation_id}: {str(e)}")
