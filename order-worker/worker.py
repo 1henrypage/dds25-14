@@ -105,7 +105,7 @@ async def add_item(order_id: str, item_id: str, quantity: int):
         return create_error_message(str(e))
 
     async with aiohttp.ClientSession() as session:
-        async with session.get(f"{GATEWAY_URL}/stock/find/{item_id}") as item_reply:
+        async with session.get(f"{GATEWAY_URL}/stock/find/{item_id}/priority") as item_reply:
             if item_reply.status != 200:
                 return create_error_message(
                     error=f"Item: {item_id} does not exist!"
