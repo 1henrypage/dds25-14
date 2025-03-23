@@ -1,6 +1,5 @@
 import asyncio
 import os
-import pickle
 import random
 import uuid
 from saga import check_saga_completion, get_order_from_db
@@ -46,13 +45,10 @@ async def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
     item_price = int(item_price)
 
     def generate_entry() -> dict:
-        user_id = random.randint(0, n_users - 1)
-        item_ids = [random.randint(0, n_items - 1) for _ in range(2)]
         return {
             "paid": 0,
-            "user_id": str(user_id),
+            "user_id": str(random.randint(0, n_users - 1)),
             "total_cost": 2 * item_price,
-            "items": [(str(item_id), 1) for item_id in item_ids]
         }
 
     kv_pairs = {str(i): generate_entry() for i in range(n)}
@@ -60,8 +56,8 @@ async def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
     try:
         async with db.pipeline() as pipe:
             for key, value in kv_pairs.items():
-                pipe.hset(key, mapping={k: v for k, v in value.items() if k != "items"})
-                pipe.rpush(f"{key}:items", *[pickle.dumps(item) for item in value["items"]])
+                pipe.hset(key, mapping={k: v for k, v in value.items()})
+                pipe.rpush(f"{key}:items", str(random.randint(0, n_items - 1)), 1, str(random.randint(0, n_items - 1)), 1)
             await pipe.execute()
     except redis.exceptions.RedisError as e:
         return create_error_message(error=str(e))
@@ -110,7 +106,7 @@ async def add_item(order_id: str, item_id: str, quantity: int):
 
     try:
         async with db.pipeline() as pipe:
-            pipe.rpush(f"{order_id}:items", pickle.dumps((item_id, quantity)))
+            pipe.rpush(f"{order_id}:items", item_id, quantity)
             pipe.hincrby(order_id, "total_cost", int(quantity * item_json["price"]))
             result = await pipe.execute()
     except redis.exceptions.RedisError as e:

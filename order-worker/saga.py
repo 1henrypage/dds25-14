@@ -1,7 +1,4 @@
-import pickle
-
 import redis
-from msgspec import msgpack
 
 from common.msg_types import MsgType
 from common.redis_utils import release_locks, attempt_acquire_locks
@@ -40,7 +37,7 @@ async def get_order_from_db(db, order_id: str) -> OrderValue | None:
     async with db.pipeline() as pipe:
         pipe.hgetall(order_id)
         pipe.lrange(f"{order_id}:items", 0, -1)
-        order_data, items_pickle = await pipe.execute()
+        order_data, items_raw = await pipe.execute()
 
     if not order_data:
         return None
@@ -49,7 +46,7 @@ async def get_order_from_db(db, order_id: str) -> OrderValue | None:
         paid=int(order_data.get(b"paid")) > 0,
         user_id=order_data.get(b"user_id").decode("utf-8"),
         total_cost=int(order_data.get(b"total_cost")),
-        items=[pickle.loads(item) for item in items_pickle] if items_pickle else []
+        items=[(items_raw[i].decode("utf-8"), int(items_raw[i + 1])) for i in range(0, len(items_raw), 2)] if items_raw else []
     )
 
 async def handle_saga_completion(db, order_worker_client, order_id: str, payment_status: int, stock_status: int, correlation_id: str):
@@ -65,10 +62,10 @@ async def handle_saga_completion(db, order_worker_client, order_id: str, payment
         return await finalize_order(db, order_id)
     elif payment_status == 1: # Payment successful but stock failed, reverse payment
         msg = {"user_id": order_entry.user_id, "total_cost": order_entry.total_cost}
-        return await reverse_service(order_worker_client, msg, correlation_id, MsgType.SAGA_PAYMENT_REVERSE, "Payment")
+        return await reverse_service(order_worker_client, msg, correlation_id, MsgType.SAGA_PAYMENT_REVERSE, "Payment", "Stock")
     elif stock_status == 1: # Stock successful but payment failed, reverse stock
         msg = {"items": order_entry.items}
-        return await reverse_service(order_worker_client, msg, correlation_id, MsgType.SAGA_STOCK_REVERSE, "Stock")
+        return await reverse_service(order_worker_client, msg, correlation_id, MsgType.SAGA_STOCK_REVERSE, "Stock", "Payment")
 
     return create_error_message("Both payment and stock services failed in the SAGA.")
 
@@ -84,7 +81,7 @@ async def finalize_order(db, order_id):
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-async def reverse_service(order_worker_client, msg, correlation_id, msg_type, service_name):
+async def reverse_service(order_worker_client, msg, correlation_id, msg_type, service_name_good, service_name_bad):
     """Handles the response when a service fails, either payment or stock."""
     await order_worker_client.order_fanout_call(
         msg=msg,
@@ -92,7 +89,7 @@ async def reverse_service(order_worker_client, msg, correlation_id, msg_type, se
         correlation_id=correlation_id,
         reply_to=None,
     )
-    return create_error_message(f"{service_name} service failed in the SAGA, {service_name} reversed.")
+    return create_error_message(f"{service_name_bad} service failed in the SAGA, {service_name_good} reversed.")
 
 # =====================
 # Saga Completion Check
