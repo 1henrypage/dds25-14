@@ -14,6 +14,7 @@ from common.msg_types import MsgType
 from common.queue_utils import consume_events, OrderWorkerClient
 from common.request_utils import create_response_message, create_error_message
 from common.redis_utils import configure_redis
+from common.idempotency_utils import is_duplicate_message, cache_response
 from model import OrderValue
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
@@ -21,31 +22,6 @@ db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(o
 order_worker_client: OrderWorkerClient = None
 
 SAGA_TIMEOUT = 30
-# Set expiration time for idempotency keys (in seconds)
-IDEMPOTENCY_EXPIRY = 60  # 1 minute
-
-# Idempotency key prefix in Redis
-IDEMPOTENCY_PREFIX = "idempotency:order:"
-
-def is_duplicate_message(correlation_id: str,message_type: str) -> bool:
-    """
-    Check if a message has been processed before using correlation_id
-    
-    :param correlation_id: The unique correlation ID for the message
-    :return: True if the message has been processed before, False otherwise
-    """
-    # Skip idempotency check if correlation_id is not provided
-    if not correlation_id:
-        return False
-        
-    # Use correlation_id as the key
-    idempotency_key = f"{IDEMPOTENCY_PREFIX}{correlation_id}:{message_type}"
-    
-    # Try to set the key with NX option (only if it doesn't exist)
-    result = db.set(idempotency_key, "1", nx=True, ex=IDEMPOTENCY_EXPIRY)
-    
-    # If result is None, the key already exists (duplicate message)
-    return result is None
 
 def get_order_from_db(order_id: str) -> OrderValue | None:
     """
@@ -184,33 +160,42 @@ async def process_message(message: AbstractIncomingMessage):
     message_type = message.type
     
     # Skip processing if this is a duplicate message
-    if correlation_id and is_duplicate_message(correlation_id, message_type):
-        print(f"Skipping duplicate message with correlation ID: {correlation_id}")
-        return create_response_message(
-            content={"status": "skipped", "reason": "duplicate_message"},
-            is_json=True
-        )
+    is_duplicate, cached_response = is_duplicate_message(db, correlation_id, message_type)
+    if is_duplicate:
+        if cached_response:
+            return cached_response
+        else:
+            print(f"No cached response found, skipping message: {correlation_id}")
+            return create_response_message(
+                content={"status": "skipped", "reason": "duplicate_message"},
+                is_json=True
+            )
     
     content = msgpack.decode(message.body)
 
+    # Process the message based on its type
     if message_type == MsgType.CREATE:
-        return create_order(user_id=content['user_id'])
+        response = create_order(user_id=content['user_id'])
     elif message_type == MsgType.BATCH_INIT:
-        return batch_init_users(n=content['n'], n_items=content['n_items'], n_users=content['n_users'], item_price=content['item_price'])
+        response = batch_init_users(n=content['n'], n_items=content['n_items'], n_users=content['n_users'], item_price=content['item_price'])
     elif message_type == MsgType.FIND:
-        return find_order(order_id=content['order_id'])
+        response = find_order(order_id=content['order_id'])
     elif message_type == MsgType.ADD:
-        return await add_item(order_id=content['order_id'], item_id=content['item_id'], quantity=content['quantity'])
+        response = await add_item(order_id=content['order_id'], item_id=content['item_id'], quantity=content['quantity'])
     elif message_type == MsgType.CHECKOUT:
-        return await checkout(content['order_id'], message.correlation_id, reply_to=message.reply_to)
+        response = await checkout(content['order_id'], message.correlation_id, reply_to=message.reply_to)
     elif message_type == MsgType.SAGA_PAYMENT_RESPONSE:
-        return await handle_payment_saga_response(status_code=content['status'], correlation_id=message.correlation_id)
+        response = await handle_payment_saga_response(status_code=content['status'], correlation_id=message.correlation_id)
     elif message_type == MsgType.SAGA_STOCK_RESPONSE:
-        return await handle_stock_saga_response(status_code=content['status'], correlation_id=message.correlation_id)
-
-    return create_error_message(
-        error = str(f"Unknown message type: {message_type}")
-    )
+        response = await handle_stock_saga_response(status_code=content['status'], correlation_id=message.correlation_id)
+    else:
+        response = create_error_message(error=f"Unknown message type: {message_type}")
+    
+    # Cache the response if we have a correlation ID
+    if correlation_id and response:
+        cache_response(db, correlation_id, message_type, response)
+    
+    return response
 
 def get_custom_reply_to(message: AbstractIncomingMessage) -> str:
     if message.type in (MsgType.SAGA_STOCK_RESPONSE, MsgType.SAGA_PAYMENT_RESPONSE):

@@ -10,34 +10,9 @@ from common.msg_types import MsgType
 from common.queue_utils import consume_events
 from common.request_utils import create_response_message, create_error_message
 from common.redis_utils import configure_redis
+from common.idempotency_utils import is_duplicate_message, cache_response
 
 db: redis.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
-
-# Set expiration time for idempotency keys (in seconds)
-IDEMPOTENCY_EXPIRY = 60  # 1 minute
-
-# Idempotency key prefix in Redis
-IDEMPOTENCY_PREFIX = "idempotency:payment:"
-
-def is_duplicate_message(correlation_id: str,message_type: str) -> bool:
-    """
-    Check if a message has been processed before using correlation_id
-    
-    :param correlation_id: The unique correlation ID for the message
-    :return: True if the message has been processed before, False otherwise
-    """
-    # Skip idempotency check if correlation_id is not provided
-    if not correlation_id:
-        return False
-        
-    # Use correlation_id as the key
-    idempotency_key = f"{IDEMPOTENCY_PREFIX}{correlation_id}:{message_type}"
-    
-    # Try to set the key with NX option (only if it doesn't exist)
-    result = db.set(idempotency_key, "1", nx=True, ex=IDEMPOTENCY_EXPIRY)
-    
-    # If result is None, the key already exists (duplicate message)
-    return result is None
 
 def create_user():
     key: str = str(uuid.uuid4())
@@ -132,42 +107,49 @@ def remove_credit(user_id: str, amount: int):
 
 
 async def process_message(message: AbstractIncomingMessage):
-    
     # Check for idempotency based on the correlation ID
     correlation_id = message.correlation_id
     message_type = message.type
     
     # Skip processing if this is a duplicate message
-    if correlation_id and is_duplicate_message(correlation_id, message_type):
-        print(f"Skipping duplicate message with correlation ID: {correlation_id}")
-        return create_response_message(
-            content={"status": "skipped", "reason": "duplicate_message"},
-            is_json=True
-        )
+    is_duplicate, cached_response = is_duplicate_message(db, correlation_id, message_type)
+    if is_duplicate:
+        if cached_response:
+            return cached_response
+        else:
+            return create_response_message(
+                content={"status": "skipped", "reason": "duplicate_message"},
+                is_json=True
+            )
     
     content = msgpack.decode(message.body)
 
+    # Process the message based on its type
     if message_type == MsgType.CREATE:
-        return create_user()
+        response = create_user()
     elif message_type == MsgType.BATCH_INIT:
-        return batch_init_users(
+        response = batch_init_users(
             n=content['n'],
             starting_money=content['starting_money']
         )
     elif message_type == MsgType.FIND:
-        return find_user(user_id=content['user_id'])
+        response = find_user(user_id=content['user_id'])
     elif message_type in (MsgType.ADD, MsgType.SAGA_PAYMENT_REVERSE):
-        return add_credit(user_id=content['user_id'], amount=content["total_cost"])
+        response = add_credit(user_id=content['user_id'], amount=content["total_cost"])
     elif message_type == MsgType.SUBTRACT:
-        return remove_credit(user_id=content['user_id'], amount=content["total_cost"])
+        response = remove_credit(user_id=content['user_id'], amount=content["total_cost"])
     elif message_type == MsgType.SAGA_INIT:
-        return remove_credit(user_id=content['user_id'], amount=content['total_cost'])
+        response = remove_credit(user_id=content['user_id'], amount=content['total_cost'])
     elif message_type == MsgType.SAGA_STOCK_REVERSE:
-        return None # Ignore
-
-    return create_error_message(
-        error=f"Unknown message type: {message_type}"
-    )
+        response = None  # Ignore
+    else:
+        response = create_error_message(error=f"Unknown message type: {message_type}")
+    
+    # Cache the response if we have a correlation ID and response
+    if correlation_id and response:
+        cache_response(db, correlation_id, message_type, response)
+    
+    return response
 
 def get_message_response_type(message: AbstractIncomingMessage) -> str:
     if message.type == MsgType.SAGA_INIT:
