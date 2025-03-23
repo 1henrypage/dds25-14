@@ -8,9 +8,15 @@ services:
     ports:
       - "8000:80"
     depends_on:
-      - order-publisher
-      - payment-publisher
-      - stock-publisher
+      - order-publisher-1
+      - order-publisher-2
+      - order-publisher-3
+      - payment-publisher-1
+      - payment-publisher-2
+      - payment-publisher-3
+      - stock-publisher-1
+      - stock-publisher-2
+      - stock-publisher-3
     networks:
       - order-net
       - stock-net
@@ -35,10 +41,46 @@ services:
       - stock-net
       - payment-net
 
-  order-publisher:
+  order-publisher-1:
     build: ./order-publisher
     image: order-publisher:latest
-    container_name: order-publisher
+    container_name: order-publisher-1
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=order-egress
+    command: hypercorn --bind 0.0.0.0:5000 --workers 2 --graceful-timeout 30 --read-timeout 30 --log-level info app:app
+    depends_on:
+      common-setup:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - order-net
+    volumes:
+      - ./common:/home/common
+
+  order-publisher-2:
+    build: ./order-publisher
+    image: order-publisher:latest
+    container_name: order-publisher-2
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=order-egress
+    command: hypercorn --bind 0.0.0.0:5000 --workers 2 --graceful-timeout 30 --read-timeout 30 --log-level info app:app
+    depends_on:
+      common-setup:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - order-net
+    volumes:
+      - ./common:/home/common
+
+  order-publisher-3:
+    build: ./order-publisher
+    image: order-publisher:latest
+    container_name: order-publisher-3
     environment:
       - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
       - ROUTE_KEY=order-egress
@@ -74,10 +116,46 @@ services:
       restart_policy:
         condition: on-failure
 
-  payment-publisher:
+  payment-publisher-1:
     build: ./payment-publisher
     image: payment-publisher:latest
-    container_name: payment-publisher
+    container_name: payment-publisher-1
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=payment-egress
+    command: hypercorn --bind 0.0.0.0:5000 --workers 2 --graceful-timeout 30 --read-timeout 30 --log-level info app:app
+    depends_on:
+      common-setup:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - payment-net
+    volumes:
+      - ./common:/home/common
+
+  payment-publisher-2:
+    build: ./payment-publisher
+    image: payment-publisher:latest
+    container_name: payment-publisher-2
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=payment-egress
+    command: hypercorn --bind 0.0.0.0:5000 --workers 2 --graceful-timeout 30 --read-timeout 30 --log-level info app:app
+    depends_on:
+      common-setup:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - payment-net
+    volumes:
+      - ./common:/home/common
+
+  payment-publisher-3:
+    build: ./payment-publisher
+    image: payment-publisher:latest
+    container_name: payment-publisher-3
     environment:
       - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
       - ROUTE_KEY=payment-egress
@@ -113,10 +191,46 @@ services:
       restart_policy:
         condition: on-failure
 
-  stock-publisher:
+  stock-publisher-1:
     build: ./stock-publisher
     image: stock-publisher:latest
-    container_name: stock-publisher
+    container_name: stock-publisher-1
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=stock-egress
+    command: hypercorn --bind 0.0.0.0:5000 --workers 2 --graceful-timeout 30 --read-timeout 30 --log-level info app:app
+    depends_on:
+      common-setup:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - stock-net
+    volumes:
+      - ./common:/home/common
+
+  stock-publisher-2:
+    build: ./stock-publisher
+    image: stock-publisher:latest
+    container_name: stock-publisher-2
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=stock-egress
+    command: hypercorn --bind 0.0.0.0:5000 --workers 2 --graceful-timeout 30 --read-timeout 30 --log-level info app:app
+    depends_on:
+      common-setup:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - stock-net
+    volumes:
+      - ./common:/home/common
+
+  stock-publisher-3:
+    build: ./stock-publisher
+    image: stock-publisher:latest
+    container_name: stock-publisher-3
     environment:
       - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
       - ROUTE_KEY=stock-egress
@@ -281,25 +395,27 @@ services:
       - stock-net
 
 
-  scale-workers:
-    build: ./scripts/scale-workers
-    image: scale-workers:latest
-    container_name: scale-workers
-    restart: always
-    environment:
-      - RABBITMQ_USER=user
-      - RABBITMQ_PASS=pass
-      - RABBITMQ_HOST=rabbitmq
-      - RABBITMQ_API_PORT=15672
-    depends_on:
-      rabbitmq:
-        condition: service_healthy
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    networks:
-      - order-net
-      - stock-net
-      - payment-net
+#  scale-workers:
+#    build:
+#      context: .
+#      dockerfile: ./scripts/scale-workers/Dockerfile
+#    image: scale-workers:latest
+#    container_name: scale-workers
+#    restart: always
+#    environment:
+#      - RABBITMQ_USER=user
+#      - RABBITMQ_PASS=pass
+#      - RABBITMQ_HOST=rabbitmq
+#      - RABBITMQ_API_PORT=15672
+#    depends_on:
+#      rabbitmq:
+#        condition: service_healthy
+#    volumes:
+#      - /var/run/docker.sock:/var/run/docker.sock
+#    networks:
+#      - order-net
+#      - stock-net
+#      - payment-net
 
   cluster-setup:
     build: ./scripts/setup-db
