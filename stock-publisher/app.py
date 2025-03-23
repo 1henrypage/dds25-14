@@ -41,6 +41,11 @@ async def find_item(item_id: str):
     response = await rpc_client.call(msg={"item_id": item_id}, msg_type=MsgType.FIND)
     return process_encoded_response_body(response=response)
 
+@app.get('/find/<item_id>/priority')
+async def find_item_priority(item_id: str):
+    response = await rpc_client.call(msg={"item_id": item_id}, msg_type=MsgType.FIND_PRIORITY)
+    return process_encoded_response_body(response=response)
+
 
 @app.post('/add/<item_id>/<amount>')
 async def add_stock(item_id: str, amount: int):
