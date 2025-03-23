@@ -11,6 +11,7 @@ class MsgType(str, Enum):
     CREATE = "CT"
     BATCH_INIT = "BI"
     FIND = "FD"
+    FIND_PRIORITY = "FP"
     ADD = "AD"
     SUBTRACT = "ST"
     CHECKOUT = "CO"
@@ -25,7 +26,8 @@ class MsgType(str, Enum):
 
     def priority(self):
         if self in (MsgType.SAGA_PAYMENT_RESPONSE, MsgType.SAGA_STOCK_RESPONSE,
-                    MsgType.SAGA_INIT, MsgType.SAGA_PAYMENT_REVERSE, MsgType.SAGA_STOCK_REVERSE):
+                    MsgType.SAGA_INIT, MsgType.SAGA_PAYMENT_REVERSE,
+                    MsgType.SAGA_STOCK_REVERSE, MsgType.FIND_PRIORITY):
             return 1
         return 0
 

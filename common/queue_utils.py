@@ -42,7 +42,7 @@ class OrderWorkerClient:
         self.connection = await connect_robust(self.rabbitmq_url)
         self.channel = await self.connection.channel()
         self.exchange = await self.channel.declare_exchange(
-            self.key, ExchangeType.FANOUT, durable=True, arguments={"x-max-priority": 1}
+            self.key, ExchangeType.FANOUT, durable=True
         )
         return self
 
@@ -156,6 +156,7 @@ class RpcClient:
                 delivery_mode=DeliveryMode.PERSISTENT,
                 reply_to=self.callback_queue.name,
                 type=msg_type,
+                priority=msg_type.priority() if msg_type else 0,
             ),
             routing_key=self.routing_key
         )
@@ -195,7 +196,7 @@ async def consume_events(process_message: Callable[[AbstractIncomingMessage], An
     connection = await connect_robust(os.environ['RABBITMQ_URL'])
     channel = await connection.channel()
     exchange = channel.default_exchange
-    queue = await channel.declare_queue(os.environ['ROUTE_KEY'])
+    queue = await channel.declare_queue(os.environ['ROUTE_KEY'], arguments={"x-max-priority": 1})
     if "ORDER_OUTBOUND" in os.environ:
         order_outbound_exchange = await channel.declare_exchange(os.environ['ORDER_OUTBOUND'], ExchangeType.FANOUT, durable=True)
         await queue.bind(order_outbound_exchange)
