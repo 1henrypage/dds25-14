@@ -135,7 +135,7 @@ async def checkout(order_id: str, correlation_id: str, reply_to: str):
     await db.hset(f"saga-{correlation_id}", mapping={'order_id': order_id, 'reply_to': reply_to})
 
     await order_worker_client.order_fanout_call(
-        msg=order_entry,
+        msg={"user_id": order_entry.user_id, "total_cost": order_entry.total_cost, "items": order_entry.items},
         msg_type=MsgType.SAGA_INIT,
         correlation_id=correlation_id,
         reply_to=os.environ['ROUTE_KEY']
