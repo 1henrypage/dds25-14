@@ -171,7 +171,7 @@ async def process_message(message: AbstractIncomingMessage):
         return await create_item(price=content["price"])
     elif message_type == MsgType.BATCH_INIT:
         return await batch_init_users(n=content["n"], starting_stock=content["starting_stock"], item_price=content["item_price"])
-    elif message_type == MsgType.FIND:
+    elif message_type == MsgType.FIND or message_type == MsgType.FIND_PRIORITY:
         return await find_item(item_id=content["item_id"])
     elif message_type == MsgType.ADD:
         return await add_stock(item_id=content["item_id"], amount=content["total_cost"])
@@ -187,7 +187,7 @@ async def process_message(message: AbstractIncomingMessage):
     return create_error_message(error=f"Unknown message type: {message_type}")
 
 
-def get_message_response_type(message: AbstractIncomingMessage) -> str:
+def get_message_response_type(message: AbstractIncomingMessage) -> MsgType:
     if message.type == MsgType.SAGA_INIT:
         return MsgType.SAGA_STOCK_RESPONSE
 
