@@ -156,7 +156,7 @@ class RpcClient:
                 delivery_mode=DeliveryMode.PERSISTENT,
                 reply_to=self.callback_queue.name,
                 type=msg_type,
-                priority=msg_type.priority() if msg_type else 0,
+                priority=msg_type.priority()
             ),
             routing_key=self.routing_key
         )
@@ -221,9 +221,9 @@ async def consume_events(process_message: Callable[[AbstractIncomingMessage], An
                                 correlation_id=message.correlation_id,
                                 delivery_mode=DeliveryMode.PERSISTENT,
                                 type=msg_type,
-                                priority= msg_type.priority() if msg_type else 0,
+                                priority= msg_type.priority() if msg_type else 0
                             ),
-                            routing_key=reply_to,
+                            routing_key=reply_to
                         )
                     else:
                         logging.debug(f"Message does not have a reply queue {message!r}")
