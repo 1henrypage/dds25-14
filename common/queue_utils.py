@@ -14,8 +14,6 @@ from aio_pika.abc import (
 
 from common.msg_types import MsgType
 
-IDEMPOTENCY_EXPIRY_TIME = 10 # 10 seconds
-
 class OrderWorkerClient:
     """
     Client which just inserts stuff into a queue from the order. No response expectation
@@ -179,7 +177,7 @@ class RpcClient:
             await self.connection.close()  # Close the connection
 
 
-async def consume_events(db: redis.asyncio.RedisCluster, process_message: Callable[[AbstractIncomingMessage], Any],
+async def consume_events(process_message: Callable[[AbstractIncomingMessage], Any],
                          get_message_response_type: Callable[[AbstractIncomingMessage], str | None],
                          get_custom_reply_to: Callable[[AbstractIncomingMessage], str | None]) -> None:
     """
@@ -217,15 +215,8 @@ async def consume_events(db: redis.asyncio.RedisCluster, process_message: Callab
                 #               Also, set to True if u want to manually ack, nack or reject messages, which will be helpful for setting up the idempotency mechanism.
                 # We will use idempotency keys to ensure that messages that were processed but not acknowledged are not reprocessed.
                 async with message.process(requeue=True, reject_on_redelivered=False, ignore_processed=True):
-                    # If processed, send an acknowledgement with the cached response but don't process again.
-                    idempotency_key = f"idempotency-{message.message_id}"
-                    cached_response = await db.get(idempotency_key)
-                    if cached_response:
-                        result = msgpack.decode(cached_response)
-                    else:
-                        result = await process_message(message)
-                        await db.setex(idempotency_key, IDEMPOTENCY_EXPIRY_TIME, msgpack.encode(result))
-
+                    # TODO: If processed, send an acknowledgement with the cached response but don't process again (Idempotency)
+                    result = await process_message(message)
                     reply_to = await get_custom_reply_to(message) or message.reply_to
 
                     if reply_to and result is not None:

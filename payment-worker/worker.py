@@ -140,7 +140,6 @@ async def get_custom_reply_to(message: AbstractIncomingMessage) -> str:
 
 if __name__ == "__main__":
     asyncio.run(consume_events(
-        db=db,
         process_message=process_message,
         get_message_response_type=get_message_response_type,
         get_custom_reply_to=get_custom_reply_to

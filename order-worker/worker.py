@@ -189,7 +189,6 @@ async def main():
     ).connect()
 
     await consume_events(
-        db=db,
         process_message=process_message,
         get_message_response_type=lambda message: None,
         get_custom_reply_to=get_custom_reply_to
