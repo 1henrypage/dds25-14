@@ -1,4 +1,4 @@
-from collections import defaultdict
+import pickle
 
 import redis
 from msgspec import msgpack
@@ -28,18 +28,41 @@ async def process_saga(db, order_worker_client, correlation_id: str):
 
     return await handle_saga_completion(db, order_worker_client, order_id, payment_status, stock_status, correlation_id)
 
+
+async def get_order_from_db(db, order_id: str) -> OrderValue | None:
+    """
+    Gets an order from DB via id. Is NONE, if it doesn't exist
+
+    :param db: database
+    :param order_id: The order ID
+    :return: The order as a `OrderValue` object, none if it doesn't exist
+    """
+    async with db.pipeline() as pipe:
+        pipe.hgetall(order_id)
+        pipe.lrange(f"{order_id}:items", 0, -1)
+        order_data, items_pickle = await pipe.execute()
+
+    if not order_data:
+        return None
+
+    return OrderValue(
+        paid=int(order_data.get(b"paid")) > 0,
+        user_id=order_data.get(b"user_id").decode("utf-8"),
+        total_cost=int(order_data.get(b"total_cost")),
+        items=[pickle.loads(item) for item in items_pickle] if items_pickle else []
+    )
+
 async def handle_saga_completion(db, order_worker_client, order_id: str, payment_status: int, stock_status: int, correlation_id: str):
     """Handles the different completion scenarios of the saga."""
     try:
-        entry: bytes = await db.get(order_id)
-        order_entry = msgpack.decode(entry, type=OrderValue) if entry else None
+        order_entry = await get_order_from_db(db, order_id)
         if order_entry is None:
             return create_error_message(f"Order for saga completion {order_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(error=str(e))
 
     if payment_status == 1 and stock_status == 1: # Both payment and stock successful, complete order
-        return await finalize_order(db, order_id, order_entry)
+        return await finalize_order(db, order_id)
     elif payment_status == 1: # Payment successful but stock failed, reverse payment
         return await reverse_service(order_worker_client, order_entry, correlation_id, MsgType.SAGA_PAYMENT_REVERSE, "Payment")
     elif stock_status == 1: # Stock successful but payment failed, reverse stock
@@ -51,11 +74,10 @@ async def handle_saga_completion(db, order_worker_client, order_id: str, payment
 # Finalization and Reversal
 # =========================
 
-async def finalize_order(db, order_id, order_entry):
+async def finalize_order(db, order_id):
     """Finalizes the order if both stock and payment succeed."""
     try:
-        order_entry.paid = True
-        await db.set(order_id, msgpack.encode(order_entry))
+        await db.hincrby(order_id, "paid", 1)
         return create_response_message("Checkout successful!", is_json=False)
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
