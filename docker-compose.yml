@@ -57,12 +57,7 @@ services:
     build: ./order-worker
     image: order-worker:latest
     env_file:
-      - env/order_redis.env
-    environment:
-      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
-      - ROUTE_KEY=order-egress
-      - GATEWAY_URL=http://gateway:80
-      - ORDER_OUTBOUND_EXCHANGE_IDENTIFIER=order-outbound
+      - env/order.env
     depends_on:
       cluster-setup:
         condition: service_completed_successfully
@@ -75,7 +70,7 @@ services:
     volumes:
       - ./common:/home/common
     deploy:
-      replicas: 5
+      replicas: 10
       restart_policy:
         condition: on-failure
 
@@ -101,11 +96,7 @@ services:
     build: ./payment-worker
     image: payment-worker:latest
     env_file:
-      - env/payment_redis.env
-    environment:
-      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
-      - ROUTE_KEY=payment-egress
-      - ORDER_OUTBOUND=order-outbound
+      - env/payment.env
     depends_on:
       cluster-setup:
         condition: service_completed_successfully
@@ -118,7 +109,7 @@ services:
     volumes:
       - ./common:/home/common
     deploy:
-      replicas: 5
+      replicas: 10
       restart_policy:
         condition: on-failure
 
@@ -144,11 +135,7 @@ services:
     build: ./stock-worker
     image: stock-worker:latest
     env_file:
-      - env/stock_redis.env
-    environment:
-      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
-      - ROUTE_KEY=stock-egress
-      - ORDER_OUTBOUND=order-outbound
+      - env/stock.env
     depends_on:
       cluster-setup:
         condition: service_completed_successfully
@@ -161,7 +148,7 @@ services:
     volumes:
       - ./common:/home/common
     deploy:
-      replicas: 5
+      replicas: 10
       restart_policy:
         condition: on-failure
 

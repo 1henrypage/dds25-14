@@ -199,6 +199,7 @@ async def consume_events(process_message: Callable[[AbstractIncomingMessage], An
     # Perform connection
     connection = await connect_robust(os.environ['RABBITMQ_URL'])
     channel = await connection.channel()
+    await channel.set_qos(prefetch_count=100)
     exchange = channel.default_exchange
     queue = await channel.declare_queue(os.environ['ROUTE_KEY'], arguments={"x-max-priority": 1})
     if "ORDER_OUTBOUND" in os.environ:
