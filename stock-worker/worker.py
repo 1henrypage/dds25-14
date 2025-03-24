@@ -134,7 +134,7 @@ async def check_and_validate_stock(item_dict: dict[str, int]):
 async def subtract_bulk(item_dict: dict[str, int]):
     """Attempts to decrement stock safely while locking only relevant keys."""
     # Attempt to acquire locks
-    if not (acquired_locks := await acquire_locks(db, item_dict.keys())):
+    if not acquire_locks(db, item_dict.keys()):
         return create_error_message("Failed to acquire necessary locks after multiple retries")
     try:
         # Fetch current stock levels and check availability
@@ -150,7 +150,7 @@ async def subtract_bulk(item_dict: dict[str, int]):
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
     finally:
-        await release_locks(db, [item_id for item_id in item_dict.keys()])
+        await release_locks(db, item_dict.keys())
 
 async def add_bulk(item_dict: dict[str, int]):
     # Use a pipeline to send multiple INCRBY commands in a batch

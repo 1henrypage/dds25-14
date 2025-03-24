@@ -59,7 +59,7 @@ async def acquire_locks(db, keys) -> list[str] | None:
     await release_locks(db, keys)
     return None
 
-async def release_locks(db, keys: list[str]):
+async def release_locks(db, keys):
     """Release the locks."""
     lock_keys = [f"{key}-lock" for key in keys]  # Ensure consistent lock key formatting
 
