@@ -102,15 +102,14 @@ async def remove_stock(item_id: str, amount: int):
             return create_error_message(
                 error=f"Item: {item_id} stock cannot get reduced below zero!"
             )
-        try:
-            new_stock = await db.hincrby(item_id, "stock", -amount)
-        except redis.exceptions.RedisError as e:
-            return create_error_message(str(e))
 
+        new_stock = await db.hincrby(item_id, "stock", -amount)
         return create_response_message(
             content=f"Item: {item_id} stock updated to: {new_stock}",
             is_json=False
         )
+    except redis.exceptions.RedisError as e:
+        return create_error_message(str(e))
     finally:
         release_locks(db, [item_id])
 

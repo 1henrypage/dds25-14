@@ -97,15 +97,13 @@ async def remove_credit(user_id: str, amount: int):
             return create_error_message(
                 error=f"User: {user_id} credit cannot get reduced below zero!"
             )
-        try:
-            new_credit = await db.decrby(user_id, amount=amount)
-        except redis.exceptions.RedisError as e:
-            return create_error_message(str(e))
-
+        new_credit = await db.decrby(user_id, amount=amount)
         return create_response_message(
             content=f"User: {user_id} credit updated to: {new_credit}",
             is_json=False
         )
+    except redis.exceptions.RedisError as e:
+        return create_error_message(str(e))
     finally:
         release_locks(db, [user_id])
 
