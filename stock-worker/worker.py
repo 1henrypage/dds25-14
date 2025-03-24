@@ -89,24 +89,30 @@ async def remove_stock(item_id: str, amount: int):
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-    item_stock = int(item_stock)
-    amount = int(amount)
-
-    # update stock, serialize and update database
-    if item_stock < amount:
-        return create_error_message(
-            error=f"Item: {item_id} stock cannot get reduced below zero!"
-        )
+    # attempt to get lock
+    if not (acquired_lock := attempt_acquire_locks(db, [item_id])):
+        return create_error_message("Failed to acquire necessary lock after multiple retries")
 
     try:
-        new_stock = await db.hincrby(item_id, "stock", -amount)
-    except redis.exceptions.RedisError as e:
-        return create_error_message(str(e))
+        item_stock = int(item_stock)
+        amount = int(amount)
 
-    return create_response_message(
-        content=f"Item: {item_id} stock updated to: {new_stock}",
-        is_json=False
-    )
+        # update stock, serialize and update database
+        if item_stock < amount:
+            return create_error_message(
+                error=f"Item: {item_id} stock cannot get reduced below zero!"
+            )
+        try:
+            new_stock = await db.hincrby(item_id, "stock", -amount)
+        except redis.exceptions.RedisError as e:
+            return create_error_message(str(e))
+
+        return create_response_message(
+            content=f"Item: {item_id} stock updated to: {new_stock}",
+            is_json=False
+        )
+    finally:
+        release_locks(db, [item_id])
 
 
 async def check_and_validate_stock(item_dict: dict[str, int]):
