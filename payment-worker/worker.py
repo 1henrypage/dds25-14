@@ -9,7 +9,7 @@ from msgspec import msgpack
 from common.msg_types import MsgType
 from common.queue_utils import consume_events
 from common.request_utils import create_response_message, create_error_message
-from common.redis_utils import configure_redis, release_locks, acquire_locks
+from common.redis_utils import configure_redis, release_locks, attempt_acquire_locks
 
 db: redis.asyncio.cluster.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
@@ -86,7 +86,7 @@ async def remove_credit(user_id: str, amount: int):
         return create_error_message(str(e))
 
     # attempt to get lock
-    if not await acquire_locks(db, [user_id]):
+    if not await attempt_acquire_locks(db, [user_id]):
         return create_error_message("Failed to acquire necessary lock after multiple retries")
 
     try:

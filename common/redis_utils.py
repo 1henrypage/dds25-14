@@ -12,6 +12,7 @@ MAX_RETRIES = 5
 MAX_RETRIES_BEFORE_ERROR = 3 # Retry 3 times, then raise error
 MAX_WAIT_TIME = 0.512
 MIN_WAIT_TIME = 0.008
+RETRY_DELAY = 0.1
 
 async def close_redis(db: redis.asyncio.RedisCluster):
     await db.close()
@@ -42,6 +43,13 @@ def configure_redis(host: str, port: int = 6379) -> redis.asyncio.RedisCluster:
 
     return db
 
+async def attempt_acquire_locks(db, keys):
+    """Attempts to acquire locks on stock keys with retry logic."""
+    for _ in range(MAX_RETRIES):
+        acquired_locks = await acquire_locks(db, keys)
+        if acquired_locks:
+            return acquired_locks
+        await asyncio.sleep(RETRY_DELAY)  # Wait before retrying
 
 async def acquire_locks(db, keys) -> list[str] | None:
     """Try to acquire locks for all relevant stock keys."""
