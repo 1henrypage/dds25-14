@@ -10,7 +10,7 @@ from msgspec import msgpack
 
 from common.msg_types import MsgType
 from common.queue_utils import consume_events
-from common.redis_utils import configure_redis, release_locks, attempt_acquire_locks
+from common.redis_utils import configure_redis, release_locks, acquire_locks, attempt_acquire_locks
 from common.request_utils import create_error_message, create_response_message
 from common.idempotency_utils import is_duplicate_message, cache_response
 
@@ -90,24 +90,29 @@ async def remove_stock(item_id: str, amount: int):
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-    item_stock = int(item_stock)
-    amount = int(amount)
-
-    # update stock, serialize and update database
-    if item_stock < amount:
-        return create_error_message(
-            error=f"Item: {item_id} stock cannot get reduced below zero!"
-        )
+    # attempt to get lock
+    if not await attempt_acquire_locks(db, [item_id]):
+        return create_error_message("Failed to acquire necessary lock after multiple retries")
 
     try:
+        item_stock = int(item_stock)
+        amount = int(amount)
+
+        # update stock, serialize and update database
+        if item_stock < amount:
+            return create_error_message(
+                error=f"Item: {item_id} stock cannot get reduced below zero!"
+            )
+
         new_stock = await db.hincrby(item_id, "stock", -amount)
+        return create_response_message(
+            content=f"Item: {item_id} stock updated to: {new_stock}",
+            is_json=False
+        )
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
-
-    return create_response_message(
-        content=f"Item: {item_id} stock updated to: {new_stock}",
-        is_json=False
-    )
+    finally:
+        await release_locks(db, [item_id])
 
 
 async def check_and_validate_stock(item_dict: dict[str, int]):
@@ -130,24 +135,23 @@ async def check_and_validate_stock(item_dict: dict[str, int]):
 async def subtract_bulk(item_dict: dict[str, int]):
     """Attempts to decrement stock safely while locking only relevant keys."""
     # Attempt to acquire locks
-    if not (acquired_locks := await attempt_acquire_locks(db, item_dict.keys())):
+    if not await attempt_acquire_locks(db, item_dict.keys()):
         return create_error_message("Failed to acquire necessary locks after multiple retries")
     try:
         # Fetch current stock levels and check availability
         if validation_error := await check_and_validate_stock(item_dict):
             return validation_error
-        # If sufficient stock is available, update in a pipeline
-        try:
-            async with db.pipeline() as pipe:
-                for item_id, dec_amount in item_dict.items():
-                    pipe.hincrby(item_id, "stock", -dec_amount)
-                await pipe.execute()
-        except redis.exceptions.RedisError as e:
-            return create_error_message(str(e))
 
+        # If sufficient stock is available, update in a pipeline
+        async with db.pipeline() as pipe:
+            for item_id, dec_amount in item_dict.items():
+                pipe.hincrby(item_id, "stock", -dec_amount)
+            await pipe.execute()
         return create_response_message(content="All items' stock successfully updated for the saga.", is_json=False)
+    except redis.exceptions.RedisError as e:
+        return create_error_message(str(e))
     finally:
-        await release_locks(db, acquired_locks)
+        await release_locks(db, item_dict.keys())
 
 async def add_bulk(item_dict: dict[str, int]):
     # Use a pipeline to send multiple INCRBY commands in a batch
@@ -180,7 +184,7 @@ async def process_message(message: AbstractIncomingMessage):
         response = await create_item(price=content["price"])
     elif message_type == MsgType.BATCH_INIT:
         response = await batch_init_users(n=content["n"], starting_stock=content["starting_stock"], item_price=content["item_price"])
-    elif message_type == MsgType.FIND:
+    elif message_type == MsgType.FIND or message_type == MsgType.FIND_PRIORITY:
         response = await find_item(item_id=content["item_id"])
     elif message_type == MsgType.ADD:
         response = await add_stock(item_id=content["item_id"], amount=content["total_cost"])
@@ -201,7 +205,7 @@ async def process_message(message: AbstractIncomingMessage):
     
     return response
 
-def get_message_response_type(message: AbstractIncomingMessage) -> str:
+def get_message_response_type(message: AbstractIncomingMessage) -> MsgType:
     if message.type == MsgType.SAGA_INIT:
         return MsgType.SAGA_STOCK_RESPONSE
 
