@@ -4,6 +4,7 @@ import os
 import logging
 from typing import MutableMapping, Callable, Any
 
+import redis
 from msgspec import msgpack
 
 from aio_pika import Message, connect_robust, DeliveryMode
@@ -12,7 +13,6 @@ from aio_pika.abc import (
 )
 
 from common.msg_types import MsgType
-
 
 class OrderWorkerClient:
     """
@@ -205,10 +205,19 @@ async def consume_events(process_message: Callable[[AbstractIncomingMessage], An
         message: AbstractIncomingMessage
         async for message in qiterator:
             try:
-                # TODO LOOK AT THE DOCUMENTATION FOR PARAMETERS THAT THIS TAKES
-                # TODO EXPONENTIAL BACKOFF WILL NEED TO BE IMPLEMENTED MANUALLY
-                async with message.process(requeue=False):
-
+                # If we start processing this and the worker dies, the message is lost
+                # For the actual implementation look here: https://github.com/mosquito/aio-pika/blob/master/aio_pika/message.py#L538
+                # Parameters:
+                #     requeue – Requeue message when exception
+                #           -> True. If worker dies we want someone else to handle the message.
+                #     reject_on_redelivered – When True message will be rejected only when message was redelivered
+                #           -> False. If worker dies we want someone else to handle the message and not reject it.
+                #     ignore_processed – Do nothing if message already processed (ack, nack, reject has been sent)
+                #           -> True. We don't want to reprocess messages that we have already acknowledged.
+                #               Also, set to True if u want to manually ack, nack or reject messages, which will be helpful for setting up the idempotency mechanism.
+                # We will use idempotency keys to ensure that messages that were processed but not acknowledged are not reprocessed.
+                async with message.process(requeue=True, reject_on_redelivered=False, ignore_processed=True):
+                    # TODO: If processed, send an acknowledgement with the cached response but don't process again (Idempotency)
                     result = await process_message(message)
                     reply_to = await get_custom_reply_to(message) or message.reply_to
 

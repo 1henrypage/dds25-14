@@ -1,7 +1,7 @@
 import redis
 
 from common.msg_types import MsgType
-from common.redis_utils import release_locks, acquire_locks
+from common.redis_utils import release_locks, attempt_acquire_locks
 from common.request_utils import create_error_message, create_response_message
 from model import OrderValue
 
@@ -96,7 +96,7 @@ async def reverse_service(order_worker_client, msg, correlation_id, msg_type, se
 async def check_saga_completion(db, order_worker_client, correlation_id):
     """Check if both payment and stock responses are available atomically using a single lock with retries."""
     lock_key = f"saga-{correlation_id}" # Lock key for the saga correlation ID
-    if await acquire_locks(db, [lock_key]):
+    if await attempt_acquire_locks(db, [lock_key]):
         try:
             # Now that we have acquired the lock, check the status in the hash
             return await process_saga(db, order_worker_client, correlation_id)
