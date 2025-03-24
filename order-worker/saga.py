@@ -1,7 +1,4 @@
-from collections import defaultdict
-
 import redis
-from msgspec import msgpack
 
 from common.msg_types import MsgType
 from common.redis_utils import release_locks, acquire_locks
@@ -26,22 +23,47 @@ async def process_saga(db, order_worker_client, correlation_id: str):
 
     return await handle_saga_completion(db, order_worker_client, order_id, payment_status, stock_status, correlation_id)
 
+
+async def get_order_from_db(db, order_id: str) -> OrderValue | None:
+    """
+    Gets an order from DB via id. Is NONE, if it doesn't exist
+
+    :param db: database
+    :param order_id: The order ID
+    :return: The order as a `OrderValue` object, none if it doesn't exist
+    """
+    async with db.pipeline() as pipe:
+        pipe.hgetall(order_id)
+        pipe.lrange(f"{order_id}:items", 0, -1)
+        order_data, items_raw = await pipe.execute()
+
+    if not order_data:
+        return None
+
+    return OrderValue(
+        paid=int(order_data.get(b"paid")) > 0,
+        user_id=order_data.get(b"user_id").decode("utf-8"),
+        total_cost=int(order_data.get(b"total_cost")),
+        items=[(items_raw[i].decode("utf-8"), int(items_raw[i + 1])) for i in range(0, len(items_raw), 2)] if items_raw else []
+    )
+
 async def handle_saga_completion(db, order_worker_client, order_id: str, payment_status: int, stock_status: int, correlation_id: str):
     """Handles the different completion scenarios of the saga."""
     try:
-        entry: bytes = await db.get(order_id)
-        order_entry = msgpack.decode(entry, type=OrderValue) if entry else None
+        order_entry = await get_order_from_db(db, order_id)
         if order_entry is None:
             return create_error_message(f"Order for saga completion {order_id} not found")
     except redis.exceptions.RedisError as e:
         return create_error_message(error=str(e))
 
     if payment_status == 1 and stock_status == 1: # Both payment and stock successful, complete order
-        return await finalize_order(db, order_id, order_entry)
+        return await finalize_order(db, order_id)
     elif payment_status == 1: # Payment successful but stock failed, reverse payment
-        return await reverse_service(order_worker_client, order_entry, correlation_id, MsgType.SAGA_PAYMENT_REVERSE, "Payment")
+        msg = {"user_id": order_entry.user_id, "total_cost": order_entry.total_cost}
+        return await reverse_service(order_worker_client, msg, correlation_id, MsgType.SAGA_PAYMENT_REVERSE, "Payment", "Stock")
     elif stock_status == 1: # Stock successful but payment failed, reverse stock
-        return await reverse_service(order_worker_client, order_entry, correlation_id, MsgType.SAGA_STOCK_REVERSE, "Stock")
+        msg = {"items": order_entry.items}
+        return await reverse_service(order_worker_client, msg, correlation_id, MsgType.SAGA_STOCK_REVERSE, "Stock", "Payment")
 
     return create_error_message("Both payment and stock services failed in the SAGA.")
 
@@ -49,24 +71,23 @@ async def handle_saga_completion(db, order_worker_client, order_id: str, payment
 # Finalization and Reversal
 # =========================
 
-async def finalize_order(db, order_id, order_entry):
+async def finalize_order(db, order_id):
     """Finalizes the order if both stock and payment succeed."""
     try:
-        order_entry.paid = True
-        await db.set(order_id, msgpack.encode(order_entry))
+        await db.hincrby(order_id, "paid", 1)
         return create_response_message("Checkout successful!", is_json=False)
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-async def reverse_service(order_worker_client, order_entry, correlation_id, msg_type, service_name):
+async def reverse_service(order_worker_client, msg, correlation_id, msg_type, service_name_good, service_name_bad):
     """Handles the response when a service fails, either payment or stock."""
     await order_worker_client.order_fanout_call(
-        msg=order_entry,
+        msg=msg,
         msg_type=msg_type,
         correlation_id=correlation_id,
         reply_to=None,
     )
-    return create_error_message(f"{service_name} service failed in the SAGA, {service_name} reversed.")
+    return create_error_message(f"{service_name_bad} service failed in the SAGA, {service_name_good} reversed.")
 
 # =====================
 # Saga Completion Check
