@@ -90,7 +90,7 @@ async def remove_stock(item_id: str, amount: int):
         return create_error_message(str(e))
 
     # attempt to get lock
-    if not (acquired_lock := attempt_acquire_locks(db, [item_id])):
+    if not (acquired_lock := await attempt_acquire_locks(db, [item_id])):
         return create_error_message("Failed to acquire necessary lock after multiple retries")
 
     try:

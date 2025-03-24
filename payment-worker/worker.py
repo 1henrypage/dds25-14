@@ -86,7 +86,7 @@ async def remove_credit(user_id: str, amount: int):
         return create_error_message(str(e))
 
     # attempt to get lock
-    if not (acquire_locks := attempt_acquire_locks(db, [user_id])):
+    if not (acquire_locks := await attempt_acquire_locks(db, [user_id])):
         return create_error_message("Failed to acquire necessary lock after multiple retries")
 
     try:
