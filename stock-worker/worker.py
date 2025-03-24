@@ -89,24 +89,29 @@ async def remove_stock(item_id: str, amount: int):
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-    item_stock = int(item_stock)
-    amount = int(amount)
-
-    # update stock, serialize and update database
-    if item_stock < amount:
-        return create_error_message(
-            error=f"Item: {item_id} stock cannot get reduced below zero!"
-        )
+    # attempt to get lock
+    if not (acquired_lock := await attempt_acquire_locks(db, [item_id])):
+        return create_error_message("Failed to acquire necessary lock after multiple retries")
 
     try:
+        item_stock = int(item_stock)
+        amount = int(amount)
+
+        # update stock, serialize and update database
+        if item_stock < amount:
+            return create_error_message(
+                error=f"Item: {item_id} stock cannot get reduced below zero!"
+            )
+
         new_stock = await db.hincrby(item_id, "stock", -amount)
+        return create_response_message(
+            content=f"Item: {item_id} stock updated to: {new_stock}",
+            is_json=False
+        )
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
-
-    return create_response_message(
-        content=f"Item: {item_id} stock updated to: {new_stock}",
-        is_json=False
-    )
+    finally:
+        await release_locks(db, [item_id])
 
 
 async def check_and_validate_stock(item_dict: dict[str, int]):
@@ -135,18 +140,17 @@ async def subtract_bulk(item_dict: dict[str, int]):
         # Fetch current stock levels and check availability
         if validation_error := await check_and_validate_stock(item_dict):
             return validation_error
-        # If sufficient stock is available, update in a pipeline
-        try:
-            async with db.pipeline() as pipe:
-                for item_id, dec_amount in item_dict.items():
-                    pipe.hincrby(item_id, "stock", -dec_amount)
-                await pipe.execute()
-        except redis.exceptions.RedisError as e:
-            return create_error_message(str(e))
 
+        # If sufficient stock is available, update in a pipeline
+        async with db.pipeline() as pipe:
+            for item_id, dec_amount in item_dict.items():
+                pipe.hincrby(item_id, "stock", -dec_amount)
+            await pipe.execute()
         return create_response_message(content="All items' stock successfully updated for the saga.", is_json=False)
+    except redis.exceptions.RedisError as e:
+        return create_error_message(str(e))
     finally:
-        await release_locks(db, acquired_locks)
+        await release_locks(db, [item_id for item_id in item_dict.keys()])
 
 async def add_bulk(item_dict: dict[str, int]):
     # Use a pipeline to send multiple INCRBY commands in a batch
