@@ -160,16 +160,9 @@ async def process_message(message: AbstractIncomingMessage):
     message_type = message.type
     
     # Skip processing if this is a duplicate message
-    is_duplicate, cached_response = await is_duplicate_message(db, correlation_id, message_type)
-    if is_duplicate:
-        if cached_response:
-            return cached_response
-        else:
-            print(f"No cached response found, skipping message: {correlation_id}")
-            return create_response_message(
-                content={"status": "skipped", "reason": "duplicate_message"},
-                is_json=True
-            )
+    cached_response = await is_duplicate_message(db, correlation_id, message_type)
+    if cached_response:
+        return cached_response
     
     content = msgpack.decode(message.body)
 

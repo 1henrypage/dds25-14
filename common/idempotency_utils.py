@@ -3,17 +3,17 @@ from msgspec import msgpack
 
 IDEMPOTENCY_EXPIRY = 60  # seconds
 
-async def is_duplicate_message(db: redis.asyncio.cluster.RedisCluster, correlation_id: str, message_type: str) -> tuple[bool, dict]:
+async def is_duplicate_message(db: redis.asyncio.cluster.RedisCluster, correlation_id: str, message_type: str) -> dict:
     """
     Check if a message has been processed before using correlation_id
     
     :param db: Redis connection
     :param correlation_id: The unique correlation ID for the message
     :param message_type: The type of message
-    :return: Tuple of (is_duplicate, cached_response)
+    :return: cached_response
     """
     if not correlation_id:
-        return False, None
+        return None
         
     idempotency_key = f"{correlation_id}:{message_type}"
     
@@ -21,13 +21,12 @@ async def is_duplicate_message(db: redis.asyncio.cluster.RedisCluster, correlati
     
     if cached_value:
         try:
-            return True, msgpack.decode(cached_value)
-        except:
-            # If we can't decode the response, there was an issue with the cached value
-            return True, None
+            return msgpack.decode(cached_value)
+        except Exception as e:
+            raise ValueError(f"Failed to decode cached response for {idempotency_key}: {str(e)}")
     
     # Message hasn't been processed before
-    return False, None
+    return None
 
 async def cache_response(db: redis.asyncio.cluster.RedisCluster, correlation_id: str, message_type: str, response: dict):
     """
