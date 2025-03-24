@@ -2,7 +2,7 @@ import asyncio
 import os
 import random
 import uuid
-from saga import check_saga_completion
+from saga import check_saga_completion, get_order_from_db
 import redis
 from aio_pika.abc import AbstractIncomingMessage
 import aiohttp
@@ -21,21 +21,16 @@ order_worker_client: OrderWorkerClient = None
 
 SAGA_TIMEOUT = 30
 
-async def get_order_from_db(order_id: str) -> OrderValue | None:
-    """
-    Gets an order from DB via id. Is NONE, if it doesn't exist
 
-    :param order_id: The order ID
-    :return: The order as a `OrderValue` object, none if it doesn't exist
-    """
-    entry: bytes = await db.get(order_id)
-    return msgpack.decode(entry, type=OrderValue) if entry else None
 
 async def create_order(user_id: str):
     key = str(uuid.uuid4())
-    value = msgpack.encode(OrderValue(paid=False, items=[], user_id=user_id, total_cost=0))
     try:
-        await db.set(key, value)
+        await db.hset(key, mapping={
+            "paid": 0,
+            "user_id": user_id,
+            "total_cost": 0
+        })
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
     return create_response_message(
@@ -49,27 +44,23 @@ async def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
     n_users = int(n_users)
     item_price = int(item_price)
 
-    def generate_entry() -> OrderValue:
-        user_id = random.randint(0, n_users - 1)
-        item1_id = random.randint(0, n_items - 1)
-        item2_id = random.randint(0, n_items - 1)
-        value = OrderValue(paid=False,
-                           items=[(f"{item1_id}", 1), (f"{item2_id}", 1)],
-                           user_id=f"{user_id}",
-                           total_cost=2*item_price)
-        return value
+    def generate_entry() -> dict:
+        return {
+            "paid": 0,
+            "user_id": str(random.randint(0, n_users - 1)),
+            "total_cost": 2 * item_price,
+        }
 
-    kv_pairs: dict[str, bytes] = {f"{i}": msgpack.encode(generate_entry())
-                                  for i in range(n)}
+    kv_pairs = {str(i): generate_entry() for i in range(n)}
+
     try:
         async with db.pipeline() as pipe:
             for key, value in kv_pairs.items():
-                pipe.set(key, value)
+                pipe.hset(key, mapping={k: v for k, v in value.items()})
+                pipe.rpush(f"{key}:items", str(random.randint(0, n_items - 1)), 1, str(random.randint(0, n_items - 1)), 1)
             await pipe.execute()
     except redis.exceptions.RedisError as e:
-        return create_error_message(
-            error=str(e)
-        )
+        return create_error_message(error=str(e))
 
     return create_response_message(
         content = {"msg": "Batch init for orders successful"},
@@ -78,7 +69,7 @@ async def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
 
 async def find_order(order_id: str):
     try:
-        order_entry: OrderValue = await get_order_from_db(order_id)
+        order_entry: OrderValue = await get_order_from_db(db, order_id)
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
     if order_entry is None:
@@ -98,7 +89,7 @@ async def find_order(order_id: str):
 
 async def add_item(order_id: str, item_id: str, quantity: int):
     try:
-        order_entry: OrderValue = await get_order_from_db(order_id)
+        order_entry: OrderValue = await get_order_from_db(db, order_id)
         if order_entry is None:
             return create_error_message(f"Order: {order_id} not found")
     except redis.exceptions.RedisError as e:
@@ -112,24 +103,26 @@ async def add_item(order_id: str, item_id: str, quantity: int):
                 )
             item_json: dict = await item_reply.json()
 
-    order_entry.items.append((item_id, int(quantity)))
-    order_entry.total_cost += int(quantity) * item_json["price"]
+
     try:
-        await db.set(order_id, msgpack.encode(order_entry))
+        async with db.pipeline() as pipe:
+            pipe.rpush(f"{order_id}:items", item_id, quantity)
+            pipe.hincrby(order_id, "total_cost", int(quantity * item_json["price"]))
+            result = await pipe.execute()
     except redis.exceptions.RedisError as e:
         return create_error_message(
             error = str(e)
         )
 
     return create_response_message(
-        content=f"Item: {item_id} added to: {order_id} price updated to: {order_entry.total_cost}",
+        content=f"Item: {item_id} added to: {order_id} price updated to: {result[1]}",
         is_json=False
     )
 
 
 async def checkout(order_id: str, correlation_id: str, reply_to: str):
     try:
-        order_entry: OrderValue = await get_order_from_db(order_id)
+        order_entry: OrderValue = await get_order_from_db(db, order_id)
         if order_entry is None:
             return create_error_message(f"Order: {order_id} not found")
     except redis.exceptions.RedisError as e:
@@ -138,7 +131,7 @@ async def checkout(order_id: str, correlation_id: str, reply_to: str):
     await db.hset(f"saga-{correlation_id}", mapping={'order_id': order_id, 'reply_to': reply_to})
 
     await order_worker_client.order_fanout_call(
-        msg=order_entry,
+        msg={"user_id": order_entry.user_id, "total_cost": order_entry.total_cost, "items": order_entry.items},
         msg_type=MsgType.SAGA_INIT,
         correlation_id=correlation_id,
         reply_to=os.environ['ROUTE_KEY']
