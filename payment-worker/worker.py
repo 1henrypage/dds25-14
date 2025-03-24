@@ -9,7 +9,7 @@ from msgspec import msgpack
 from common.msg_types import MsgType
 from common.queue_utils import consume_events
 from common.request_utils import create_response_message, create_error_message
-from common.redis_utils import configure_redis
+from common.redis_utils import configure_redis, release_locks, attempt_acquire_locks
 
 db: redis.asyncio.cluster.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
@@ -85,24 +85,29 @@ async def remove_credit(user_id: str, amount: int):
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-    credit = int(credit)
+    # attempt to get lock
+    if not (acquire_locks := attempt_acquire_locks(db, [user_id])):
+        return create_error_message("Failed to acquire necessary lock after multiple retries")
 
-    # update credit, serialize and update database
-    credit -= int(amount)
-
-    if credit < 0:
-        return create_error_message(
-            error=f"User: {user_id} credit cannot get reduced below zero!"
-        )
     try:
-        await db.set(user_id, credit)
-    except redis.exceptions.RedisError as e:
-        return create_error_message(str(e))
+        credit = int(credit)
+        amount = int(amount)
 
-    return create_response_message(
-        content=f"User: {user_id} credit updated to: {credit}",
-        is_json=False
-    )
+        if credit < amount:
+            return create_error_message(
+                error=f"User: {user_id} credit cannot get reduced below zero!"
+            )
+        try:
+            new_credit = await db.decrby(user_id, amount=amount)
+        except redis.exceptions.RedisError as e:
+            return create_error_message(str(e))
+
+        return create_response_message(
+            content=f"User: {user_id} credit updated to: {new_credit}",
+            is_json=False
+        )
+    finally:
+        release_locks(db, [user_id])
 
 
 async def process_message(message: AbstractIncomingMessage):
