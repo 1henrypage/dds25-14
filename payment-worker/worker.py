@@ -78,18 +78,15 @@ async def add_credit(user_id: str, amount: int):
 
 
 async def remove_credit(user_id: str, amount: int):
-    try:
-        credit = await db.get(user_id)
-        if credit is None:
-            return create_error_message(f"User: {user_id} not found")
-    except redis.exceptions.RedisError as e:
-        return create_error_message(str(e))
-
     # attempt to get lock
     if not await attempt_acquire_locks(db, [user_id]):
         return create_error_message("Failed to acquire necessary lock after multiple retries")
 
     try:
+        credit = await db.get(user_id)
+        if credit is None:
+            return create_error_message(f"User: {user_id} not found")
+
         credit = int(credit)
         amount = int(amount)
 

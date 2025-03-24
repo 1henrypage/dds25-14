@@ -64,7 +64,7 @@ async def acquire_locks(db, keys) -> list[str] | None:
     if all(lock_results):
         return lock_keys
     # If any lock fails, release all acquired locks and return None
-    await release_locks(db, keys)
+    await release_locks(db, [key for idx, key in enumerate(keys) if not lock_results[idx]])
     return None
 
 async def release_locks(db, keys):

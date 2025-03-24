@@ -82,18 +82,14 @@ async def add_stock(item_id: str, amount: int):
     )
 
 async def remove_stock(item_id: str, amount: int):
-    try:
-        item_stock = await db.hget(item_id, "stock")
-        if item_stock is None:
-            return create_error_message(f"Item: {item_id} not found")
-    except redis.exceptions.RedisError as e:
-        return create_error_message(str(e))
-
     # attempt to get lock
     if not await attempt_acquire_locks(db, [item_id]):
         return create_error_message("Failed to acquire necessary lock after multiple retries")
 
     try:
+        item_stock = await db.hget(item_id, "stock")
+        if item_stock is None:
+            return create_error_message(f"Item: {item_id} not found")
         item_stock = int(item_stock)
         amount = int(amount)
 
