@@ -140,18 +140,17 @@ async def subtract_bulk(item_dict: dict[str, int]):
         # Fetch current stock levels and check availability
         if validation_error := await check_and_validate_stock(item_dict):
             return validation_error
-        # If sufficient stock is available, update in a pipeline
-        try:
-            async with db.pipeline() as pipe:
-                for item_id, dec_amount in item_dict.items():
-                    pipe.hincrby(item_id, "stock", -dec_amount)
-                await pipe.execute()
-        except redis.exceptions.RedisError as e:
-            return create_error_message(str(e))
 
+        # If sufficient stock is available, update in a pipeline
+        async with db.pipeline() as pipe:
+            for item_id, dec_amount in item_dict.items():
+                pipe.hincrby(item_id, "stock", -dec_amount)
+            await pipe.execute()
         return create_response_message(content="All items' stock successfully updated for the saga.", is_json=False)
+    except redis.exceptions.RedisError as e:
+        return create_error_message(str(e))
     finally:
-        await release_locks(db, acquired_locks)
+        await release_locks(db, [item_id for item_id in item_dict.keys()])
 
 async def add_bulk(item_dict: dict[str, int]):
     # Use a pipeline to send multiple INCRBY commands in a batch
