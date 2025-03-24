@@ -105,7 +105,7 @@ async def remove_credit(user_id: str, amount: int):
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
     finally:
-        release_locks(db, [user_id])
+        await release_locks(db, [user_id])
 
 
 async def process_message(message: AbstractIncomingMessage):

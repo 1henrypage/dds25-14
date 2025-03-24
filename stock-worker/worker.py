@@ -111,7 +111,7 @@ async def remove_stock(item_id: str, amount: int):
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
     finally:
-        release_locks(db, [item_id])
+        await release_locks(db, [item_id])
 
 
 async def check_and_validate_stock(item_dict: dict[str, int]):
