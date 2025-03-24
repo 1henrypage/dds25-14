@@ -5,8 +5,6 @@ from common.redis_utils import release_locks, attempt_acquire_locks
 from common.request_utils import create_error_message, create_response_message
 from model import OrderValue
 
-SAGA_TIMEOUT = 30
-
 # ====================
 # Saga Processing Logic
 # ====================
