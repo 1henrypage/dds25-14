@@ -19,9 +19,7 @@ GATEWAY_URL = os.environ['GATEWAY_URL']
 db: redis.asyncio.cluster.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 order_worker_client: OrderWorkerClient = None
 
-SAGA_TIMEOUT = 30
-
-
+SAGA_TIMEOUT = 120
 
 async def create_order(user_id: str):
     key = str(uuid.uuid4())
@@ -128,13 +126,25 @@ async def checkout(order_id: str, correlation_id: str, reply_to: str):
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-    await db.hset(f"saga-{correlation_id}", mapping={'order_id': order_id, 'reply_to': reply_to})
+    async with db.pipeline() as pipe:
+        pipe.hset(f"saga-{correlation_id}", mapping={'order_id': order_id, 'reply_to': reply_to})
+        pipe.expire(f"saga-{correlation_id}", SAGA_TIMEOUT)
+        await pipe.execute()
 
-    await order_worker_client.order_fanout_call(
+    await order_worker_client.call_with_route_no_reply(
         msg={"user_id": order_entry.user_id, "total_cost": order_entry.total_cost, "items": order_entry.items},
         msg_type=MsgType.SAGA_INIT,
-        correlation_id=correlation_id,
-        reply_to=os.environ['ROUTE_KEY']
+        routing_key=os.environ['PAYMENT_ROUTE'],
+        reply_to=os.environ['ROUTE_KEY'],
+        correlation_id=correlation_id
+    )
+
+    await order_worker_client.call_with_route_no_reply(
+        msg={"user_id": order_entry.user_id, "total_cost": order_entry.total_cost, "items": order_entry.items},
+        msg_type=MsgType.SAGA_INIT,
+        routing_key=os.environ['STOCK_ROUTE'],
+        reply_to=os.environ['ROUTE_KEY'],
+        correlation_id=correlation_id
     )
 
 async def handle_payment_saga_response(status_code, correlation_id):
@@ -178,7 +188,6 @@ async def main():
     global order_worker_client
     order_worker_client = await OrderWorkerClient(
         rabbitmq_url=os.environ['RABBITMQ_URL'],
-        exchange_key=os.environ['ORDER_OUTBOUND_EXCHANGE_IDENTIFIER']
     ).connect()
 
     await consume_events(

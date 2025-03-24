@@ -10,6 +10,7 @@ from common.msg_types import MsgType
 from common.queue_utils import consume_events
 from common.request_utils import create_response_message, create_error_message
 from common.redis_utils import configure_redis, release_locks, attempt_acquire_locks
+import logging
 
 db: redis.asyncio.cluster.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
 
@@ -125,6 +126,7 @@ async def process_message(message: AbstractIncomingMessage):
     elif message_type == MsgType.SAGA_INIT:
         return await remove_credit(user_id=content['user_id'], amount=content['total_cost'])
     elif message_type == MsgType.SAGA_STOCK_REVERSE:
+        logging.error("THIS SHOULDN'T EVER HAPPEN BIG PROBLEMS IF IT DOES!")
         return None # Ignore
 
     return create_error_message(

@@ -182,6 +182,7 @@ async def process_message(message: AbstractIncomingMessage):
     elif message_type == MsgType.SAGA_STOCK_REVERSE:
         return await add_bulk(item_dict=dict(content["items"]))
     elif message_type == MsgType.SAGA_PAYMENT_REVERSE:
+        logging.error("THIS SHOULDN'T EVER HAPPEEN, BIG PROBLEMS IF IT DOES")
         return None # Ignore
 
     return create_error_message(error=f"Unknown message type: {message_type}")
