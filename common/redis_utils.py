@@ -12,13 +12,13 @@ from redis.asyncio.cluster import ClusterNode
 from redis.asyncio.retry import Retry
 from redis.backoff import ExponentialBackoff
 
+# LOCK VALUES
 LOCK_EXPIRY=3 # 3 seconds lock expiry in case of error
-MAX_RETRIES = 2
-MAX_RETRIES_BEFORE_ERROR = 50 # Retry 3 times, then raise error
+MAX_RETRIES = 3
 LOCK_RETRY_DELAY = 0.1
 
-async def close_redis(db: redis.asyncio.RedisCluster):
-    await db.close()
+# CLUSTER VALUES
+MAX_RETRIES_BEFORE_ERROR = 3# Retry 3 times, then raise error
 
 def configure_redis() -> redis.asyncio.RedisCluster:
     """
@@ -56,15 +56,12 @@ def configure_redis() -> redis.asyncio.RedisCluster:
     db = redis.asyncio.cluster.RedisCluster(
         startup_nodes=nodes,
         decode_responses=False,
-        retry=Retry(ExponentialBackoff(base=0.1,cap=1), MAX_RETRIES),
+        retry=Retry(ExponentialBackoff(), 6),
         retry_on_error=exceptions_to_retry,
         cluster_error_retry_attempts=MAX_RETRIES_BEFORE_ERROR,
         require_full_coverage=True
     )
 
-    loop = asyncio.get_event_loop()
-    loop.add_signal_handler(signal.SIGTERM, lambda: asyncio.create_task(close_redis(db)))
-    loop.add_signal_handler(signal.SIGINT, lambda: asyncio.create_task(close_redis(db)))
 
     return db
 
