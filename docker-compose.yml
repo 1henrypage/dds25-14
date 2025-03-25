@@ -269,42 +269,42 @@ services:
   order-master-1:
     image: redis:7.4.2
     container_name: order-master-1
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - order-net
 
   order-master-2:
     image: redis:7.4.2
     container_name: order-master-2
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - order-net
 
   order-master-3:
     image: redis:7.4.2
     container_name: order-master-3
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - order-net
 
   order-replica-1:
     image: redis:7.4.2
     container_name: order-replica-1
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - order-net
 
   order-replica-2:
     image: redis:7.4.2
     container_name: order-replica-2
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - order-net
 
   order-replica-3:
     image: redis:7.4.2
     container_name: order-replica-3
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - order-net
 
@@ -312,42 +312,42 @@ services:
   payment-master-1:
     image: redis:7.4.2
     container_name: payment-master-1
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - payment-net
 
   payment-master-2:
     image: redis:7.4.2
     container_name: payment-master-2
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - payment-net
 
   payment-master-3:
     image: redis:7.4.2
     container_name: payment-master-3
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - payment-net
 
   payment-replica-1:
     image: redis:7.4.2
     container_name: payment-replica-1
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - payment-net
 
   payment-replica-2:
     image: redis:7.4.2
     container_name: payment-replica-2
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - payment-net
 
   payment-replica-3:
     image: redis:7.4.2
     container_name: payment-replica-3
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - payment-net
 
@@ -355,42 +355,42 @@ services:
   stock-master-1:
     image: redis:7.4.2
     container_name: stock-master-1
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - stock-net
 
   stock-master-2:
     image: redis:7.4.2
     container_name: stock-master-2
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - stock-net
 
   stock-master-3:
     image: redis:7.4.2
     container_name: stock-master-3
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - stock-net
 
   stock-replica-1:
     image: redis:7.4.2
     container_name: stock-replica-1
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - stock-net
 
   stock-replica-2:
     image: redis:7.4.2
     container_name: stock-replica-2
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - stock-net
 
   stock-replica-3:
     image: redis:7.4.2
     container_name: stock-replica-3
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "100", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - stock-net
 

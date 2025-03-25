@@ -45,7 +45,6 @@ class OrderWorkerClient:
             msgpack.encode(msg),
             content_type="application/msgpack",
             correlation_id=correlation_id,
-            delivery_mode=DeliveryMode.PERSISTENT,
             type=msg_type,
             reply_to=reply_to,
             priority=msg_type.priority()
@@ -123,7 +122,8 @@ class RpcClient:
             return
 
         future: asyncio.Future = self.futures.pop(message.correlation_id)
-        future.set_result(message.body)
+        if not future.done():
+            future.set_result(message.body)
 
     async def call(self, msg: Any, msg_type: MsgType):
         """
@@ -148,7 +148,6 @@ class RpcClient:
                 msgpack.encode(msg),
                 content_type="application/msgpack",
                 correlation_id=correlation_id,
-                delivery_mode=DeliveryMode.PERSISTENT,
                 reply_to=self.callback_queue.name,
                 type=msg_type,
                 priority=msg_type.priority()
@@ -221,7 +220,6 @@ async def consume_events(process_message: Callable[[AbstractIncomingMessage], An
                                 body=msgpack.encode(result),
                                 content_type="application/msgpack",
                                 correlation_id=message.correlation_id,
-                                delivery_mode=DeliveryMode.PERSISTENT,
                                 type=msg_type,
                                 priority= msg_type.priority() if msg_type else 0
                             ),

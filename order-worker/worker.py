@@ -16,10 +16,10 @@ from common.redis_utils import configure_redis
 from model import OrderValue
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
-db: redis.asyncio.cluster.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
+db: redis.asyncio.cluster.RedisCluster = configure_redis()
 order_worker_client: OrderWorkerClient = None
 
-SAGA_TIMEOUT = 120
+SAGA_TIMEOUT = 2700
 
 async def create_order(user_id: str):
     key = str(uuid.uuid4())
@@ -29,7 +29,7 @@ async def create_order(user_id: str):
             "user_id": user_id,
             "total_cost": 0
         })
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
     return create_response_message(
         content = {'order_id': key},
@@ -57,7 +57,7 @@ async def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
                 pipe.hset(key, mapping={k: v for k, v in value.items()})
                 pipe.rpush(f"{key}:items", str(random.randint(0, n_items - 1)), 1, str(random.randint(0, n_items - 1)), 1)
             await pipe.execute()
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(error=str(e))
 
     return create_response_message(
@@ -68,7 +68,7 @@ async def batch_init_users(n: int, n_items: int, n_users: int, item_price: int):
 async def find_order(order_id: str):
     try:
         order_entry: OrderValue = await get_order_from_db(db, order_id)
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
     if order_entry is None:
         return create_error_message(f"Order: {order_id} not found")
@@ -90,7 +90,7 @@ async def add_item(order_id: str, item_id: str, quantity: int):
         order_entry: OrderValue = await get_order_from_db(db, order_id)
         if order_entry is None:
             return create_error_message(f"Order: {order_id} not found")
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
 
     async with aiohttp.ClientSession() as session:
@@ -107,7 +107,7 @@ async def add_item(order_id: str, item_id: str, quantity: int):
             pipe.rpush(f"{order_id}:items", item_id, quantity)
             pipe.hincrby(order_id, "total_cost", int(quantity * item_json["price"]))
             result = await pipe.execute()
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(
             error = str(e)
         )
@@ -123,7 +123,7 @@ async def checkout(order_id: str, correlation_id: str, reply_to: str):
         order_entry: OrderValue = await get_order_from_db(db, order_id)
         if order_entry is None:
             return create_error_message(f"Order: {order_id} not found")
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
 
     async with db.pipeline() as pipe:
@@ -131,21 +131,23 @@ async def checkout(order_id: str, correlation_id: str, reply_to: str):
         pipe.expire(f"saga-{correlation_id}", SAGA_TIMEOUT)
         await pipe.execute()
 
-    await order_worker_client.call_with_route_no_reply(
-        msg={"user_id": order_entry.user_id, "total_cost": order_entry.total_cost, "items": order_entry.items},
-        msg_type=MsgType.SAGA_INIT,
-        routing_key=os.environ['PAYMENT_ROUTE'],
-        reply_to=os.environ['ROUTE_KEY'],
-        correlation_id=correlation_id
+    await asyncio.gather(
+        order_worker_client.call_with_route_no_reply(
+            msg={"user_id": order_entry.user_id, "total_cost": order_entry.total_cost, "items": order_entry.items},
+            msg_type=MsgType.SAGA_INIT,
+            routing_key=os.environ['PAYMENT_ROUTE'],
+            reply_to=os.environ['ROUTE_KEY'],
+            correlation_id=correlation_id
+        ),
+        order_worker_client.call_with_route_no_reply(
+            msg={"user_id": order_entry.user_id, "total_cost": order_entry.total_cost, "items": order_entry.items},
+            msg_type=MsgType.SAGA_INIT,
+            routing_key=os.environ['STOCK_ROUTE'],
+            reply_to=os.environ['ROUTE_KEY'],
+            correlation_id=correlation_id
+        )
     )
 
-    await order_worker_client.call_with_route_no_reply(
-        msg={"user_id": order_entry.user_id, "total_cost": order_entry.total_cost, "items": order_entry.items},
-        msg_type=MsgType.SAGA_INIT,
-        routing_key=os.environ['STOCK_ROUTE'],
-        reply_to=os.environ['ROUTE_KEY'],
-        correlation_id=correlation_id
-    )
 
 async def handle_payment_saga_response(status_code, correlation_id):
     await db.hsetnx(f"saga-{correlation_id}", "payment", "1" if status_code == 200 else "0")

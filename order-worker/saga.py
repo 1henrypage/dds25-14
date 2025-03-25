@@ -54,7 +54,7 @@ async def handle_saga_completion(db, order_worker_client, order_id: str, payment
         order_entry = await get_order_from_db(db, order_id)
         if order_entry is None:
             return create_error_message(f"Order for saga completion {order_id} not found")
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(error=str(e))
 
     result = None
@@ -81,7 +81,7 @@ async def finalize_order(db, order_id):
     try:
         await db.hincrby(order_id, "paid", 1)
         return create_response_message("Checkout successful!", is_json=False)
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
 
 async def reverse_service(order_worker_client, msg, correlation_id, msg_type, service_name_good, service_name_bad):
