@@ -13,14 +13,14 @@ from common.queue_utils import consume_events
 from common.redis_utils import configure_redis, release_locks, acquire_locks, attempt_acquire_locks
 from common.request_utils import create_error_message, create_response_message
 
-db: redis.asyncio.cluster.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
+db: redis.asyncio.cluster.RedisCluster = configure_redis()
 
 
 async def create_item(price: int):
     key = str(uuid.uuid4())
     try:
         await db.hset(key, mapping={"stock": 0, "price": int(price)})
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
     return create_response_message(
         content={'item_id':key},
@@ -39,7 +39,7 @@ async def batch_init_users(n: int, starting_stock: int, item_price: int):
             for i in range(n):
                 pipe.hset(f"{i}", mapping={"stock": starting_stock, "price": item_price})
             await pipe.execute()
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
 
     return create_response_message(
@@ -52,7 +52,7 @@ async def find_item(item_id: str):
         item_data = await db.hgetall(item_id)
         if not item_data:
             return create_error_message(f"Item: {item_id} not found")
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
 
     return create_response_message(
@@ -67,13 +67,13 @@ async def add_stock(item_id: str, amount: int):
     try:
         if not await db.exists(item_id):
             return create_error_message(f"Item: {item_id} not found")
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
 
     # update stock, serialize and update database
     try:
         new_stock = int(await db.hincrby(item_id, "stock", amount))
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
 
     return create_response_message(
@@ -82,18 +82,14 @@ async def add_stock(item_id: str, amount: int):
     )
 
 async def remove_stock(item_id: str, amount: int):
-    try:
-        item_stock = await db.hget(item_id, "stock")
-        if item_stock is None:
-            return create_error_message(f"Item: {item_id} not found")
-    except redis.exceptions.RedisError as e:
-        return create_error_message(str(e))
-
     # attempt to get lock
     if not await attempt_acquire_locks(db, [item_id]):
         return create_error_message("Failed to acquire necessary lock after multiple retries")
 
     try:
+        item_stock = await db.hget(item_id, "stock")
+        if item_stock is None:
+            return create_error_message(f"Item: {item_id} not found")
         item_stock = int(item_stock)
         amount = int(amount)
 
@@ -108,7 +104,7 @@ async def remove_stock(item_id: str, amount: int):
             content=f"Item: {item_id} stock updated to: {new_stock}",
             is_json=False
         )
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
     finally:
         await release_locks(db, [item_id])
@@ -147,7 +143,7 @@ async def subtract_bulk(item_dict: dict[str, int]):
                 pipe.hincrby(item_id, "stock", -dec_amount)
             await pipe.execute()
         return create_response_message(content="All items' stock successfully updated for the saga.", is_json=False)
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
     finally:
         await release_locks(db, item_dict.keys())
@@ -159,7 +155,7 @@ async def add_bulk(item_dict: dict[str, int]):
             for item_id, inc_amount in item_dict.items():
                 pipe.hincrby(item_id, "stock", inc_amount)
             await pipe.execute()
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
 
     return create_response_message(
@@ -186,6 +182,7 @@ async def process_message(message: AbstractIncomingMessage):
     elif message_type == MsgType.SAGA_STOCK_REVERSE:
         return await add_bulk(item_dict=dict(content["items"]))
     elif message_type == MsgType.SAGA_PAYMENT_REVERSE:
+        logging.error("THIS SHOULDN'T EVER HAPPEEN, BIG PROBLEMS IF IT DOES")
         return None # Ignore
 
     return create_error_message(error=f"Unknown message type: {message_type}")

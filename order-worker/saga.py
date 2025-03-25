@@ -1,4 +1,5 @@
 import redis
+import os
 
 from common.msg_types import MsgType
 from common.redis_utils import release_locks, attempt_acquire_locks
@@ -14,8 +15,8 @@ async def process_saga(db, order_worker_client, correlation_id: str):
     saga_key = f"saga-{correlation_id}"
     order_data = await db.hgetall(saga_key)
 
-    if not order_data or b"payment" not in order_data or b"stock" not in order_data:
-        return None  # Saga is not yet complete
+    if not order_data or b"payment" not in order_data or b"stock" not in order_data or b"processed" in order_data:
+        return None  # Saga is not yet complete or has been completed already
 
     payment_status = int(order_data[b"payment"])
     stock_status = int(order_data[b"stock"])
@@ -53,19 +54,23 @@ async def handle_saga_completion(db, order_worker_client, order_id: str, payment
         order_entry = await get_order_from_db(db, order_id)
         if order_entry is None:
             return create_error_message(f"Order for saga completion {order_id} not found")
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(error=str(e))
 
+    result = None
+
     if payment_status == 1 and stock_status == 1: # Both payment and stock successful, complete order
-        return await finalize_order(db, order_id)
+        result = await finalize_order(db, order_id)
     elif payment_status == 1: # Payment successful but stock failed, reverse payment
         msg = {"user_id": order_entry.user_id, "total_cost": order_entry.total_cost}
-        return await reverse_service(order_worker_client, msg, correlation_id, MsgType.SAGA_PAYMENT_REVERSE, "Payment", "Stock")
+        result = await reverse_service(order_worker_client, msg, correlation_id, MsgType.SAGA_PAYMENT_REVERSE, "Payment", "Stock")
     elif stock_status == 1: # Stock successful but payment failed, reverse stock
         msg = {"items": order_entry.items}
-        return await reverse_service(order_worker_client, msg, correlation_id, MsgType.SAGA_STOCK_REVERSE, "Stock", "Payment")
+        result = await reverse_service(order_worker_client, msg, correlation_id, MsgType.SAGA_STOCK_REVERSE, "Stock", "Payment")
 
-    return create_error_message("Both payment and stock services failed in the SAGA.")
+    await db.hsetnx(f"saga-{correlation_id}", "processed", "1")
+
+    return create_error_message("Both payment and stock services failed in the SAGA.") if result is None else result
 
 # =========================
 # Finalization and Reversal
@@ -76,17 +81,30 @@ async def finalize_order(db, order_id):
     try:
         await db.hincrby(order_id, "paid", 1)
         return create_response_message("Checkout successful!", is_json=False)
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
 
 async def reverse_service(order_worker_client, msg, correlation_id, msg_type, service_name_good, service_name_bad):
     """Handles the response when a service fails, either payment or stock."""
-    await order_worker_client.order_fanout_call(
-        msg=msg,
-        msg_type=msg_type,
-        correlation_id=correlation_id,
-        reply_to=None,
-    )
+    if msg_type == MsgType.SAGA_PAYMENT_REVERSE:
+        await order_worker_client.call_with_route_no_reply(
+            msg=msg,
+            msg_type=msg_type,
+            routing_key=os.environ['PAYMENT_ROUTE'],
+            correlation_id=correlation_id,
+            reply_to=None
+        )
+    elif msg_type == MsgType.SAGA_STOCK_REVERSE:
+        await order_worker_client.call_with_route_no_reply(
+            msg=msg,
+            msg_type=msg_type,
+            routing_key=os.environ['STOCK_ROUTE'],
+            correlation_id=correlation_id,
+            reply_to=None
+        )
+    else:
+        raise RuntimeError("This shouldn't happen!")
+
     return create_error_message(f"{service_name_bad} service failed in the SAGA, {service_name_good} reversed.")
 
 # =====================

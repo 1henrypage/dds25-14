@@ -10,14 +10,15 @@ from common.msg_types import MsgType
 from common.queue_utils import consume_events
 from common.request_utils import create_response_message, create_error_message
 from common.redis_utils import configure_redis, release_locks, attempt_acquire_locks
+import logging
 
-db: redis.asyncio.cluster.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
+db: redis.asyncio.cluster.RedisCluster = configure_redis()
 
 async def create_user():
     key: str = str(uuid.uuid4())
     try:
         await db.set(key, 0)
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
     return create_response_message(
         content={'user_id':key},
@@ -33,7 +34,7 @@ async def batch_init_users(n: int, starting_money: int):
             for key, value in kv_pairs.items():
                 pipe.set(key, value)
             await pipe.execute()
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
     return create_response_message(
         content={"msg": "Batch init for users successful"},
@@ -45,7 +46,7 @@ async def find_user(user_id: str):
         credit = await db.get(user_id)
         if credit is None:
             return create_error_message(f"User: {user_id} not found")
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
 
     credit = int(credit)
@@ -62,13 +63,13 @@ async def add_credit(user_id: str, amount: int):
     try:
         if not await db.exists(user_id):
             return create_error_message(f"User: {user_id} not found")
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
 
     # update credit, serialize and update database
     try:
         new_balance = await db.incrby(user_id,amount=amount)
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
 
     return create_response_message(
@@ -78,18 +79,15 @@ async def add_credit(user_id: str, amount: int):
 
 
 async def remove_credit(user_id: str, amount: int):
-    try:
-        credit = await db.get(user_id)
-        if credit is None:
-            return create_error_message(f"User: {user_id} not found")
-    except redis.exceptions.RedisError as e:
-        return create_error_message(str(e))
-
     # attempt to get lock
     if not await attempt_acquire_locks(db, [user_id]):
         return create_error_message("Failed to acquire necessary lock after multiple retries")
 
     try:
+        credit = await db.get(user_id)
+        if credit is None:
+            return create_error_message(f"User: {user_id} not found")
+
         credit = int(credit)
         amount = int(amount)
 
@@ -102,7 +100,7 @@ async def remove_credit(user_id: str, amount: int):
             content=f"User: {user_id} credit updated to: {new_credit}",
             is_json=False
         )
-    except redis.exceptions.RedisError as e:
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
     finally:
         await release_locks(db, [user_id])
@@ -128,6 +126,7 @@ async def process_message(message: AbstractIncomingMessage):
     elif message_type == MsgType.SAGA_INIT:
         return await remove_credit(user_id=content['user_id'], amount=content['total_cost'])
     elif message_type == MsgType.SAGA_STOCK_REVERSE:
+        logging.error("THIS SHOULDN'T EVER HAPPEN BIG PROBLEMS IF IT DOES!")
         return None # Ignore
 
     return create_error_message(

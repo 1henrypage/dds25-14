@@ -4,35 +4,55 @@ import redis
 import atexit
 import signal
 import asyncio
+import os
+import random
+
+from redis.asyncio.cluster import ClusterNode
 from redis.asyncio.retry import Retry
 from redis.backoff import ExponentialBackoff
 
 LOCK_EXPIRY=3 # 3 seconds lock expiry in case of error
-MAX_RETRIES = 5
-MAX_RETRIES_BEFORE_ERROR = 3 # Retry 3 times, then raise error
-MAX_WAIT_TIME = 0.512
-MIN_WAIT_TIME = 0.008
-RETRY_DELAY = 0.1
+MAX_RETRIES = 1
+MAX_RETRIES_BEFORE_ERROR = 100 # Retry 3 times, then raise error
+LOCK_RETRY_DELAY = 0.1
 
 async def close_redis(db: redis.asyncio.RedisCluster):
     await db.close()
 
-def configure_redis(host: str, port: int = 6379) -> redis.asyncio.RedisCluster:
+def configure_redis() -> redis.asyncio.RedisCluster:
     """
     Connect to database and register a callback handler which terminates the database upon app termination.
 
-    :param host: The host of any redis node within the cluster.
-    :param port: The port number of the associated node
     :return: An initialised cluster client.
     """
-    host = str(host)
-    port = int(port)
+    port = int(os.environ['REDIS_PORT'])
+    nodes = [
+        ClusterNode(os.environ['MASTER_1'], port=port),
+        ClusterNode(os.environ['MASTER_2'], port=port),
+        ClusterNode(os.environ['MASTER_3'], port=port),
+        ClusterNode(os.environ['REPLICA_1'], port=port),
+        ClusterNode(os.environ['REPLICA_2'], port=port),
+        ClusterNode(os.environ['REPLICA_3'], port=port),
+    ]
+
+    # Shuffle only the first three nodes (masters)
+    random.shuffle(nodes[:3])
+
+    # The shuffled first three nodes combined with the unchanged replicas
+    nodes = nodes[:3] + nodes[3:]
+
+    exceptions_to_retry = [
+        redis.exceptions.ClusterDownError,
+        redis.exceptions.ConnectionError,
+        redis.exceptions.BusyLoadingError,
+        redis.exceptions.TimeoutError,
+    ]
+
     db = redis.asyncio.cluster.RedisCluster(
-        host=host,
-        port=port,
+        startup_nodes=nodes,
         decode_responses=False,
-        retry=Retry(ExponentialBackoff(cap=MAX_WAIT_TIME, base=MIN_WAIT_TIME), MAX_RETRIES),
-        retry_on_error=[ConnectionError, TimeoutError, ConnectionResetError],
+        retry=Retry(ExponentialBackoff(base=0.1,cap=1), MAX_RETRIES),
+        retry_on_error=exceptions_to_retry,
         cluster_error_retry_attempts=MAX_RETRIES_BEFORE_ERROR,
         require_full_coverage=True
     )
@@ -49,7 +69,7 @@ async def attempt_acquire_locks(db, keys):
         acquired_locks = await acquire_locks(db, keys)
         if acquired_locks:
             return acquired_locks
-        await asyncio.sleep(RETRY_DELAY)  # Wait before retrying
+        await asyncio.sleep(LOCK_RETRY_DELAY)  # Wait before retrying
 
 async def acquire_locks(db, keys) -> list[str] | None:
     """Try to acquire locks for all relevant stock keys."""
@@ -64,7 +84,7 @@ async def acquire_locks(db, keys) -> list[str] | None:
     if all(lock_results):
         return lock_keys
     # If any lock fails, release all acquired locks and return None
-    await release_locks(db, keys)
+    await release_locks(db, [key for idx, key in enumerate(keys) if lock_results[idx]])
     return None
 
 async def release_locks(db, keys):

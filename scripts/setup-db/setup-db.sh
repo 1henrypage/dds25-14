@@ -44,11 +44,6 @@ create_redis_cluster() {
     exit 1
   fi
 
-#  for ip in "${ip_array[@]}"; do
-#    echo "Flushing all keys on Redis node $ip"
-#    yes | redis-cli -h $ip -p $REDIS_PORT flushall
-#  done
-
   echo "Creating Redis cluster for $cluster_name..."
 
   # Create the Redis cluster with the IPs

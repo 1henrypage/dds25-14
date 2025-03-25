@@ -8,9 +8,15 @@ services:
     ports:
       - "8000:80"
     depends_on:
-      - order-publisher
-      - payment-publisher
-      - stock-publisher
+      - order-publisher-1
+      - order-publisher-2
+      - order-publisher-3
+      - payment-publisher-1
+      - payment-publisher-2
+      - payment-publisher-3
+      - stock-publisher-1
+      - stock-publisher-2
+      - stock-publisher-3
     networks:
       - order-net
       - stock-net
@@ -35,10 +41,46 @@ services:
       - stock-net
       - payment-net
 
-  order-publisher:
+  order-publisher-1:
     build: ./order-publisher
     image: order-publisher:latest
-    container_name: order-publisher
+    container_name: order-publisher-1
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=order-egress
+    command: hypercorn --bind 0.0.0.0:5000 --workers 2 --graceful-timeout 30 --read-timeout 30 --log-level info app:app
+    depends_on:
+      common-setup:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - order-net
+    volumes:
+      - ./common:/home/common
+
+  order-publisher-2:
+    build: ./order-publisher
+    image: order-publisher:latest
+    container_name: order-publisher-2
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=order-egress
+    command: hypercorn --bind 0.0.0.0:5000 --workers 2 --graceful-timeout 30 --read-timeout 30 --log-level info app:app
+    depends_on:
+      common-setup:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - order-net
+    volumes:
+      - ./common:/home/common
+
+  order-publisher-3:
+    build: ./order-publisher
+    image: order-publisher:latest
+    container_name: order-publisher-3
     environment:
       - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
       - ROUTE_KEY=order-egress
@@ -56,14 +98,8 @@ services:
   order-worker:
     build: ./order-worker
     image: order-worker:latest
-    container_name: order-worker
     env_file:
-      - env/order_redis.env
-    environment:
-      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
-      - ROUTE_KEY=order-egress
-      - GATEWAY_URL=http://gateway:80
-      - ORDER_OUTBOUND_EXCHANGE_IDENTIFIER=order-outbound
+      - env/order.env
     depends_on:
       cluster-setup:
         condition: service_completed_successfully
@@ -75,11 +111,51 @@ services:
       - order-net
     volumes:
       - ./common:/home/common
+    deploy:
+      replicas: 10
+      restart_policy:
+        condition: on-failure
 
-  payment-publisher:
+  payment-publisher-1:
     build: ./payment-publisher
     image: payment-publisher:latest
-    container_name: payment-publisher
+    container_name: payment-publisher-1
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=payment-egress
+    command: hypercorn --bind 0.0.0.0:5000 --workers 2 --graceful-timeout 30 --read-timeout 30 --log-level info app:app
+    depends_on:
+      common-setup:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - payment-net
+    volumes:
+      - ./common:/home/common
+
+  payment-publisher-2:
+    build: ./payment-publisher
+    image: payment-publisher:latest
+    container_name: payment-publisher-2
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=payment-egress
+    command: hypercorn --bind 0.0.0.0:5000 --workers 2 --graceful-timeout 30 --read-timeout 30 --log-level info app:app
+    depends_on:
+      common-setup:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - payment-net
+    volumes:
+      - ./common:/home/common
+
+  payment-publisher-3:
+    build: ./payment-publisher
+    image: payment-publisher:latest
+    container_name: payment-publisher-3
     environment:
       - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
       - ROUTE_KEY=payment-egress
@@ -97,13 +173,8 @@ services:
   payment-worker:
     build: ./payment-worker
     image: payment-worker:latest
-    container_name: payment-worker
     env_file:
-      - env/payment_redis.env
-    environment:
-      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
-      - ROUTE_KEY=payment-egress
-      - ORDER_OUTBOUND=order-outbound
+      - env/payment.env
     depends_on:
       cluster-setup:
         condition: service_completed_successfully
@@ -115,11 +186,51 @@ services:
       - payment-net
     volumes:
       - ./common:/home/common
+    deploy:
+      replicas: 10
+      restart_policy:
+        condition: on-failure
 
-  stock-publisher:
+  stock-publisher-1:
     build: ./stock-publisher
     image: stock-publisher:latest
-    container_name: stock-publisher
+    container_name: stock-publisher-1
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=stock-egress
+    command: hypercorn --bind 0.0.0.0:5000 --workers 2 --graceful-timeout 30 --read-timeout 30 --log-level info app:app
+    depends_on:
+      common-setup:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - stock-net
+    volumes:
+      - ./common:/home/common
+
+  stock-publisher-2:
+    build: ./stock-publisher
+    image: stock-publisher:latest
+    container_name: stock-publisher-2
+    environment:
+      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
+      - ROUTE_KEY=stock-egress
+    command: hypercorn --bind 0.0.0.0:5000 --workers 2 --graceful-timeout 30 --read-timeout 30 --log-level info app:app
+    depends_on:
+      common-setup:
+        condition: service_completed_successfully
+      rabbitmq:
+        condition: service_healthy
+    networks:
+      - stock-net
+    volumes:
+      - ./common:/home/common
+
+  stock-publisher-3:
+    build: ./stock-publisher
+    image: stock-publisher:latest
+    container_name: stock-publisher-3
     environment:
       - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
       - ROUTE_KEY=stock-egress
@@ -137,13 +248,8 @@ services:
   stock-worker:
     build: ./stock-worker
     image: stock-worker:latest
-    container_name: stock-worker
     env_file:
-      - env/stock_redis.env
-    environment:
-      - RABBITMQ_URL=amqp://user:pass@rabbitmq:5672/
-      - ROUTE_KEY=stock-egress
-      - ORDER_OUTBOUND=order-outbound
+      - env/stock.env
     depends_on:
       cluster-setup:
         condition: service_completed_successfully
@@ -155,46 +261,50 @@ services:
       - stock-net
     volumes:
       - ./common:/home/common
+    deploy:
+      replicas: 10
+      restart_policy:
+        condition: on-failure
 
   order-master-1:
     image: redis:7.4.2
     container_name: order-master-1
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - order-net
 
   order-master-2:
     image: redis:7.4.2
     container_name: order-master-2
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - order-net
 
   order-master-3:
     image: redis:7.4.2
     container_name: order-master-3
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - order-net
 
   order-replica-1:
     image: redis:7.4.2
     container_name: order-replica-1
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - order-net
 
   order-replica-2:
     image: redis:7.4.2
     container_name: order-replica-2
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - order-net
 
   order-replica-3:
     image: redis:7.4.2
     container_name: order-replica-3
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - order-net
 
@@ -202,42 +312,42 @@ services:
   payment-master-1:
     image: redis:7.4.2
     container_name: payment-master-1
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - payment-net
 
   payment-master-2:
     image: redis:7.4.2
     container_name: payment-master-2
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - payment-net
 
   payment-master-3:
     image: redis:7.4.2
     container_name: payment-master-3
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - payment-net
 
   payment-replica-1:
     image: redis:7.4.2
     container_name: payment-replica-1
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - payment-net
 
   payment-replica-2:
     image: redis:7.4.2
     container_name: payment-replica-2
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - payment-net
 
   payment-replica-3:
     image: redis:7.4.2
     container_name: payment-replica-3
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - payment-net
 
@@ -245,44 +355,67 @@ services:
   stock-master-1:
     image: redis:7.4.2
     container_name: stock-master-1
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - stock-net
 
   stock-master-2:
     image: redis:7.4.2
     container_name: stock-master-2
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - stock-net
 
   stock-master-3:
     image: redis:7.4.2
     container_name: stock-master-3
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - stock-net
 
   stock-replica-1:
     image: redis:7.4.2
     container_name: stock-replica-1
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - stock-net
 
   stock-replica-2:
     image: redis:7.4.2
     container_name: stock-replica-2
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - stock-net
 
   stock-replica-3:
     image: redis:7.4.2
     container_name: stock-replica-3
-    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "3000", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
+    command: ["redis-server", "--cluster-enabled", "yes", "--cluster-node-timeout", "30", "--appendonly", "yes", "--cluster-require-full-coverage","yes", "--maxmemory", "512mb"]
     networks:
       - stock-net
+
+
+#  scale-workers:
+#    build:
+#      context: .
+#      dockerfile: ./scripts/scale-workers/Dockerfile
+#    image: scale-workers:latest
+#    container_name: scale-workers
+#    restart: always
+#    environment:
+#      - RABBITMQ_USER=user
+#      - RABBITMQ_PASS=pass
+#      - RABBITMQ_HOST=rabbitmq
+#      - RABBITMQ_API_PORT=15672
+#    depends_on:
+#      rabbitmq:
+#        condition: service_healthy
+#    volumes:
+#      - /var/run/docker.sock:/var/run/docker.sock
+#    networks:
+#      - order-net
+#      - stock-net
+#      - payment-net
 
   cluster-setup:
     build: ./scripts/setup-db

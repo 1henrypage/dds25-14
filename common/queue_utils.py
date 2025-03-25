@@ -20,20 +20,16 @@ class OrderWorkerClient:
     """
     connection: AbstractConnection
     channel: AbstractChannel
-    exchange: AbstractExchange
     rabbitmq_url: str
-    exchange_key: str
+    online: bool
 
-    def __init__(self, rabbitmq_url: str, exchange_key: str) -> None:
+    def __init__(self, rabbitmq_url: str) -> None:
         """
         Initialise the object, but don't connect!
 
-        :param exchange_key: The exchange name or queue name, depending on mode
         :param rabbitmq_url: The URL of the RabbitMQ server
-        :param publish_to_exchange: Whether to publish to an exchange (True) or a queue (False)
         """
         self.rabbitmq_url = rabbitmq_url
-        self.key = exchange_key
 
     async def connect(self) -> "OrderWorkerClient":
         """
@@ -41,33 +37,27 @@ class OrderWorkerClient:
         """
         self.connection = await connect_robust(self.rabbitmq_url)
         self.channel = await self.connection.channel()
-        self.exchange = await self.channel.declare_exchange(
-            self.key, ExchangeType.FANOUT, durable=True
-        )
+        self.online = True
         return self
 
-
-    async def order_fanout_call(self, msg: Any, msg_type: MsgType, reply_to: str, correlation_id: str = None):
-        """
-        Forwards a message into a fanout exchange with a correlation id.
-        """
-
+    async def call_with_route_no_reply(self, msg: Any, msg_type: MsgType, routing_key: str, reply_to: str, correlation_id: str = None):
         message = Message(
             msgpack.encode(msg),
             content_type="application/msgpack",
             correlation_id=correlation_id,
-            delivery_mode=DeliveryMode.PERSISTENT,
             type=msg_type,
             reply_to=reply_to,
             priority=msg_type.priority()
         )
 
-        await self.exchange.publish(message, routing_key="")  # Routing key ignored for fanout
+        await self.channel.default_exchange.publish(message, routing_key=routing_key)
+
 
     async def disconnect(self):
         """
         Disconnects the client gracefully
         """
+        self.online = False
         if self.channel:
             await self.channel.close()
         if self.connection:
@@ -127,8 +117,13 @@ class RpcClient:
             logging.debug(f"Message doesn't have correlation ID: {message!r}")
             return
 
+        if message.correlation_id not in self.futures:
+            logging.debug(f"Message has correlation id, but scaling out made something weird happen")
+            return
+
         future: asyncio.Future = self.futures.pop(message.correlation_id)
-        future.set_result(message.body)
+        if not future.done():
+            future.set_result(message.body)
 
     async def call(self, msg: Any, msg_type: MsgType):
         """
@@ -153,7 +148,6 @@ class RpcClient:
                 msgpack.encode(msg),
                 content_type="application/msgpack",
                 correlation_id=correlation_id,
-                delivery_mode=DeliveryMode.PERSISTENT,
                 reply_to=self.callback_queue.name,
                 type=msg_type,
                 priority=msg_type.priority()
@@ -195,11 +189,9 @@ async def consume_events(process_message: Callable[[AbstractIncomingMessage], An
     # Perform connection
     connection = await connect_robust(os.environ['RABBITMQ_URL'])
     channel = await connection.channel()
+    await channel.set_qos(prefetch_count=500)
     exchange = channel.default_exchange
     queue = await channel.declare_queue(os.environ['ROUTE_KEY'], arguments={"x-max-priority": 1})
-    if "ORDER_OUTBOUND" in os.environ:
-        order_outbound_exchange = await channel.declare_exchange(os.environ['ORDER_OUTBOUND'], ExchangeType.FANOUT, durable=True)
-        await queue.bind(order_outbound_exchange)
 
     async with queue.iterator() as qiterator:
         message: AbstractIncomingMessage
@@ -228,7 +220,6 @@ async def consume_events(process_message: Callable[[AbstractIncomingMessage], An
                                 body=msgpack.encode(result),
                                 content_type="application/msgpack",
                                 correlation_id=message.correlation_id,
-                                delivery_mode=DeliveryMode.PERSISTENT,
                                 type=msg_type,
                                 priority= msg_type.priority() if msg_type else 0
                             ),
