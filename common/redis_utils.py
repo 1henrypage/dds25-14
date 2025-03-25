@@ -5,6 +5,7 @@ import atexit
 import signal
 import asyncio
 import os
+import socket
 import random
 
 from redis.asyncio.cluster import ClusterNode
@@ -46,6 +47,10 @@ def configure_redis() -> redis.asyncio.RedisCluster:
         redis.exceptions.ConnectionError,
         redis.exceptions.BusyLoadingError,
         redis.exceptions.TimeoutError,
+        ConnectionResetError,
+        OSError,
+        TimeoutError,
+        socket.timeout
     ]
 
     db = redis.asyncio.cluster.RedisCluster(
