@@ -14,7 +14,7 @@ from redis.backoff import ExponentialBackoff
 
 LOCK_EXPIRY=3 # 3 seconds lock expiry in case of error
 MAX_RETRIES = 1
-MAX_RETRIES_BEFORE_ERROR = 100 # Retry 3 times, then raise error
+MAX_RETRIES_BEFORE_ERROR = 15 # Retry 3 times, then raise error
 LOCK_RETRY_DELAY = 0.1
 
 async def close_redis(db: redis.asyncio.RedisCluster):
