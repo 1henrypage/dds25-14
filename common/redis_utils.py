@@ -53,7 +53,7 @@ async def attempt_acquire_locks(db, keys):
 
 async def acquire_locks(db, keys) -> list[str] | None:
     """Try to acquire locks for all relevant stock keys."""
-    lock_keys = [f"{key}-lock" for key in keys]  # Ensure consistent lock key formatting
+    lock_keys = [f"{{{key}}}-lock" for key in keys]  # Ensure consistent lock key formatting
     # Try to acquire all locks
     async with db.pipeline() as pipe:
         for lock in lock_keys:
@@ -69,7 +69,7 @@ async def acquire_locks(db, keys) -> list[str] | None:
 
 async def release_locks(db, keys):
     """Release the locks."""
-    lock_keys = [f"{key}-lock" for key in keys]  # Ensure consistent lock key formatting
+    lock_keys = [f"{{{key}}}-lock" for key in keys]  # Ensure consistent lock key formatting
 
     async with db.pipeline() as pipe:
         for lock in lock_keys:

@@ -1,152 +1,169 @@
-import asyncio
 import os
 import uuid
-
+import asyncio
 import redis
+
 from aio_pika.abc import AbstractIncomingMessage
 from msgspec import msgpack
 
 from common.msg_types import MsgType
 from common.queue_utils import consume_events
-from common.request_utils import create_response_message, create_error_message
 from common.redis_utils import configure_redis, release_locks, attempt_acquire_locks
-from common.idempotency_utils import is_duplicate_message, cache_response
+from common.request_utils import create_error_message, create_response_message
+from common.idempotency_utils import is_duplicate_message, make_response_key
 
-db: redis.asyncio.cluster.RedisCluster = configure_redis(host=os.environ['MASTER_1'], port=int(os.environ['REDIS_PORT']))
+db: redis.asyncio.cluster.RedisCluster = configure_redis(
+    host=os.environ['MASTER_1'],
+    port=int(os.environ['REDIS_PORT'])
+)
 
-async def create_user():
-    key: str = str(uuid.uuid4())
+async def recover_pending_operations():
+    pending_keys = await db.keys("pending:*")
+    for pending_key in pending_keys:
+        try:
+            _, correlation_id, message_type = pending_key.decode().split(":")
+            user_key = await db.get(pending_key)
+            if not user_key:
+                continue
+
+            user_id = user_key.decode().strip("{}")
+            response_key = make_response_key(user_id, correlation_id, message_type)
+
+            if await db.exists(response_key):
+                await db.delete(pending_key)
+                continue
+
+            print(f"[RECOVERY] Message {correlation_id} of type {message_type} with user {user_id} may need replay.")
+        except Exception as e:
+            print(f"[RECOVERY ERROR] {pending_key}: {e}")
+
+async def create_user(correlation_id: str, message_type: str):
+    user_id = str(uuid.uuid4())
+    user_key = f"{{{user_id}}}"
+    response_key = make_response_key(user_id, correlation_id, message_type)
+    pending_key = f"pending:{correlation_id}:{message_type}"
+
     try:
-        await db.set(key, 0)
+        await db.set(pending_key, user_key)
+        await db.set(user_key, 0)
+        response = create_response_message(content={'user_id': user_id}, is_json=True)
+        await db.set(response_key, msgpack.encode(response))
+        await db.delete(pending_key)
+        return response
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
-    return create_response_message(
-        content={'user_id':key},
-        is_json=True
-    )
 
-async def batch_init_users(n: int, starting_money: int):
-    n = int(n)
-    starting_money = int(starting_money)
-    kv_pairs: dict[str, int] = {f"{i}": starting_money for i in range(n)}
+async def batch_init_users(n: str, starting_money: int, correlation_id: str, message_type: str):
     try:
         async with db.pipeline() as pipe:
-            for key, value in kv_pairs.items():
-                pipe.set(key, value)
+            for i in range(int(n)):
+                pipe.set(f"{{{i}}}", starting_money)
             await pipe.execute()
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
-    return create_response_message(
-        content={"msg": "Batch init for users successful"},
-        is_json=True
-    )
+
+    return create_response_message(content={"msg": "Batch init for users successful"}, is_json=True)
 
 async def find_user(user_id: str):
     try:
-        credit = await db.get(user_id)
+        credit = await db.get(f"{{{user_id}}}")
         if credit is None:
             return create_error_message(f"User: {user_id} not found")
+        return create_response_message(content={"user_id": user_id, "credit": int(credit)}, is_json=True)
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
 
-    credit = int(credit)
-
-    return create_response_message(
-        content={
-            "user_id": user_id,
-            "credit": credit
-        },
-        is_json=True
-    )
-
-async def add_credit(user_id: str, amount: int):
-    try:
-        if not await db.exists(user_id):
-            return create_error_message(f"User: {user_id} not found")
-    except redis.exceptions.RedisError as e:
-        return create_error_message(str(e))
-
-    # update credit, serialize and update database
-    try:
-        new_balance = await db.incrby(user_id,amount=amount)
-    except redis.exceptions.RedisError as e:
-        return create_error_message(str(e))
-
-    return create_response_message(
-        content=f"User: {user_id} credit updated to: {new_balance}",
-        is_json=False
-    )
-
-
-async def remove_credit(user_id: str, amount: int):
-    try:
-        credit = await db.get(user_id)
-        if credit is None:
-            return create_error_message(f"User: {user_id} not found")
-    except redis.exceptions.RedisError as e:
-        return create_error_message(str(e))
-
-    # attempt to get lock
-    if not await attempt_acquire_locks(db, [user_id]):
-        return create_error_message("Failed to acquire necessary lock after multiple retries")
+async def add_credit(user_id: str, amount: int, correlation_id: str, message_type: str):
+    user_key = f"{{{user_id}}}"
+    response_key = make_response_key(user_id, correlation_id, message_type)
+    pending_key = f"pending:{correlation_id}:{message_type}"
 
     try:
-        credit = int(credit)
-        amount = int(amount)
+        # Check if we've already processed this request
+        if await db.exists(response_key):
+            return msgpack.decode(await db.get(response_key))
 
-        if credit < amount:
-            return create_error_message(
-                error=f"User: {user_id} credit cannot get reduced below zero!"
+        # Use pipeline for atomic operations
+        async with db.pipeline() as pipe:
+            # Get current balance
+            pipe.get(user_key)
+            # Set pending key
+            pipe.set(pending_key, user_key)
+            # Update balance atomically
+            pipe.incrby(user_key, amount)
+            # Execute all commands
+            current_balance, _, new_balance = await pipe.execute()
+
+            if current_balance is None:
+                return create_error_message(f"User: {user_id} not found")
+
+            # Create and store response
+            response = create_response_message(
+                content=f"User: {user_id} credit updated to: {new_balance}",
+                is_json=False
             )
-        new_credit = await db.decrby(user_id, amount=amount)
-        return create_response_message(
-            content=f"User: {user_id} credit updated to: {new_credit}",
-            is_json=False
-        )
+            await db.set(response_key, msgpack.encode(response))
+            await db.delete(pending_key)
+            return response
+
+    except redis.exceptions.RedisError as e:
+        return create_error_message(str(e))
+    except Exception as e:
+        return create_error_message(str(e))
+
+async def remove_credit(user_id: str, amount: int, correlation_id: str, message_type: str):
+    user_key = f"{{{user_id}}}"
+    response_key = make_response_key(user_id, correlation_id, message_type)
+    pending_key = f"pending:{correlation_id}:{message_type}"
+
+    try:
+        credit = await db.get(user_key)
+        if credit is None:
+            return create_error_message(f"User: {user_id} not found")
+
+        if not await attempt_acquire_locks(db, [user_id]):
+            return create_error_message("Failed to acquire necessary lock after multiple retries")
+
+        if int(credit) < amount:
+            return create_error_message(error=f"User: {user_id} credit cannot get reduced below zero!")
+
+        await db.set(pending_key, user_key)
+        new_balance = await db.decrby(user_key, amount)
+
+        response = create_response_message(content=f"User: {user_id} credit updated to: {new_balance}", is_json=False)
+        await db.set(response_key, msgpack.encode(response))
+        await db.delete(pending_key)
+        return response
     except redis.exceptions.RedisError as e:
         return create_error_message(str(e))
     finally:
         await release_locks(db, [user_id])
 
-
 async def process_message(message: AbstractIncomingMessage):
-    # Check for idempotency based on the correlation ID
     correlation_id = message.correlation_id
     message_type = message.type
-    
-    # Skip processing if this is a duplicate message
-    cached_response = await is_duplicate_message(db, correlation_id, message_type)
-    if cached_response:
-        return cached_response
-    
     content = msgpack.decode(message.body)
 
-    # Process the message based on its type
+    user_id = content.get("user_id", "create")  # fallback for CREATE
+
+    cached = await is_duplicate_message(db, user_id, correlation_id, message_type)
+    if cached:
+        return cached
+
     if message_type == MsgType.CREATE:
-        response = await create_user()
+        return await create_user(correlation_id, message_type)
     elif message_type == MsgType.BATCH_INIT:
-        response = await batch_init_users(
-            n=content['n'],
-            starting_money=content['starting_money']
-        )
+        return await batch_init_users(n=content["n"], starting_money=content["starting_money"], correlation_id=correlation_id, message_type=message_type)
     elif message_type == MsgType.FIND:
-        response = await find_user(user_id=content['user_id'])
+        return await find_user(user_id=content["user_id"])
     elif message_type in (MsgType.ADD, MsgType.SAGA_PAYMENT_REVERSE):
-        response = await add_credit(user_id=content['user_id'], amount=content["total_cost"])
-    elif message_type == MsgType.SUBTRACT:
-        response = await remove_credit(user_id=content['user_id'], amount=content["total_cost"])
-    elif message_type == MsgType.SAGA_INIT:
-        response = await remove_credit(user_id=content['user_id'], amount=content['total_cost'])
+        return await add_credit(user_id=content["user_id"], amount=content["total_cost"], correlation_id=correlation_id, message_type=message_type)
+    elif message_type in (MsgType.SUBTRACT, MsgType.SAGA_INIT):
+        return await remove_credit(user_id=content["user_id"], amount=content["total_cost"], correlation_id=correlation_id, message_type=message_type)
     elif message_type == MsgType.SAGA_STOCK_REVERSE:
-        response = None  # Ignore
+        return None
     else:
-        response = create_error_message(error=f"Unknown message type: {message_type}")
-    
-    # Cache the response if we have a correlation ID and response
-    if correlation_id and response:
-        await cache_response(db, correlation_id, message_type, response)
-    
-    return response
+        return create_error_message(error=f"Unknown message type: {message_type}")
 
 def get_message_response_type(message: AbstractIncomingMessage) -> MsgType:
     if message.type == MsgType.SAGA_INIT:
@@ -155,9 +172,30 @@ def get_message_response_type(message: AbstractIncomingMessage) -> MsgType:
 async def get_custom_reply_to(message: AbstractIncomingMessage) -> str:
     return None
 
+async def main():
+    try:
+        # First recover any pending operations
+        await recover_pending_operations()
+        
+        # Then start consuming events
+        await consume_events(
+            process_message=process_message,
+            get_message_response_type=get_message_response_type,
+            get_custom_reply_to=get_custom_reply_to
+        )
+    except Exception as e:
+        print(f"Error in main: {e}")
+    finally:
+        # Ensure we close the Redis connection
+        try:
+            await db.close()
+        except Exception as e:
+            print(f"Error closing Redis connection: {e}")
+
 if __name__ == "__main__":
-    asyncio.run(consume_events(
-        process_message=process_message,
-        get_message_response_type=get_message_response_type,
-        get_custom_reply_to=get_custom_reply_to
-    ))
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Shutting down gracefully...")
+    except Exception as e:
+        print(f"Fatal error: {e}")
