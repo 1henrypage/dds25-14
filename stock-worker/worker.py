@@ -12,6 +12,7 @@ from common.msg_types import MsgType
 from common.queue_utils import consume_events
 from common.redis_utils import configure_redis, release_locks, acquire_locks, attempt_acquire_locks
 from common.request_utils import create_error_message, create_response_message
+from common.idempotency_utils import is_duplicate_message, cache_response_with_db, cache_response_with_pipe
 
 db: redis.asyncio.cluster.RedisCluster = configure_redis()
 
@@ -63,25 +64,35 @@ async def find_item(item_id: str):
         is_json=True
     )
 
-async def add_stock(item_id: str, amount: int):
+async def add_stock(item_id: str, amount: int,correlation_id: str, message_type: str):
+    cached_response = await is_duplicate_message(db,correlation_id,message_type)
+    if cached_response is not None:
+        return cached_response
     try:
         if not await db.exists(item_id):
+            await cache_response_with_db(db,correlation_id,message_type,False)
             return create_error_message(f"Item: {item_id} not found")
     except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
 
     # update stock, serialize and update database
     try:
-        new_stock = int(await db.hincrby(item_id, "stock", amount))
+        async with db.pipeline() as pipe:
+            pipe.hincrby(item_id, "stock", amount)
+            cache_response_with_pipe(pipe,correlation_id,message_type,True)
+            await pipe.execute()
     except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
 
     return create_response_message(
-        content = f"Item: {item_id} stock updated to: {new_stock}",
+        content = f"Item: {item_id} stock updated",
         is_json=False
     )
 
-async def remove_stock(item_id: str, amount: int):
+async def remove_stock(item_id: str, amount: int,correlation_id: str, message_type: str):
+    cached_response = await is_duplicate_message(db,correlation_id,message_type)
+    if cached_response is not None:
+        return cached_response
     # attempt to get lock
     if not await attempt_acquire_locks(db, [item_id]):
         return create_error_message("Failed to acquire necessary lock after multiple retries")
@@ -89,22 +100,31 @@ async def remove_stock(item_id: str, amount: int):
     try:
         item_stock = await db.hget(item_id, "stock")
         if item_stock is None:
+            await cache_response_with_db(db,correlation_id,message_type,False)
             return create_error_message(f"Item: {item_id} not found")
         item_stock = int(item_stock)
         amount = int(amount)
 
         # update stock, serialize and update database
         if item_stock < amount:
+            await cache_response_with_db(db,correlation_id,message_type,False)
             return create_error_message(
                 error=f"Item: {item_id} stock cannot get reduced below zero!"
             )
-
-        new_stock = await db.hincrby(item_id, "stock", -amount)
+        try:
+            async with db.pipeline() as pipe:
+                new_stock = pipe.hincrby(item_id, "stock", -amount)
+                cache_response_with_pipe(pipe,correlation_id,message_type,True)
+                await pipe.execute()
+        except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
+            return create_error_message(str(e))
+        
         return create_response_message(
             content=f"Item: {item_id} stock updated to: {new_stock}",
             is_json=False
         )
     except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
+        await cache_response_with_db(db,correlation_id,message_type,False)
         return create_error_message(str(e))
     finally:
         await release_locks(db, [item_id])
@@ -174,9 +194,9 @@ async def process_message(message: AbstractIncomingMessage):
     elif message_type == MsgType.FIND or message_type == MsgType.FIND_PRIORITY:
         return await find_item(item_id=content["item_id"])
     elif message_type == MsgType.ADD:
-        return await add_stock(item_id=content["item_id"], amount=content["total_cost"])
+        return await add_stock(item_id=content["item_id"], amount=content["total_cost"],correlation_id=message.correlation_id,message_type=message_type)
     elif message_type == MsgType.SUBTRACT:
-        return await remove_stock(item_id=content["item_id"], amount=content["total_cost"])
+        return await remove_stock(item_id=content["item_id"], amount=content["total_cost"],correlation_id=message.correlation_id,message_type=message_type)
     elif message_type == MsgType.SAGA_INIT:
         return await subtract_bulk(item_dict=dict(content["items"]))
     elif message_type == MsgType.SAGA_STOCK_REVERSE:
