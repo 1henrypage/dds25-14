@@ -76,13 +76,13 @@ async def add_credit(user_id: str, amount: int, correlation_id: str, message_typ
         async with db.pipeline() as pipe:
             pipe.incrby(user_id,amount=amount)
             cache_response_with_pipe(pipe,correlation_id,message_type,True)
-            await pipe.execute()
+            result = await pipe.execute()
     except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         await cache_response_with_db(db,correlation_id,message_type,False)
         return create_error_message(str(e))
 
     return create_response_message(
-        content=f"User: {user_id} credit updated",
+        content=f"User: {user_id} credit updated to:{result[0]}",
         is_json=False
     )
 
@@ -110,11 +110,11 @@ async def remove_credit(user_id: str, amount: int, correlation_id: str, message_
                 error=f"User: {user_id} credit cannot get reduced below zero!"
             )
         async with db.pipeline() as pipe:
-            new_credit = pipe.decrby(user_id, amount=amount)
+            pipe.decrby(user_id, amount=amount)
             cache_response_with_pipe(pipe,correlation_id,message_type,True)
-            await pipe.execute()
+            result = await pipe.execute()
         return create_response_message(
-                content=f"User: {user_id} credit updated to",
+                content=f"User: {user_id} credit updated to: {result[0]}",
                 is_json=False
             )
     except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
