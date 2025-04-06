@@ -4,7 +4,9 @@
 
 This project implements a microservices system consisting of Order, Stock, and Payment services that interact. The transaction protocol uses SAGA, with a focus on fault tolerance, high availability, and eventual consistency.
 
-![Architecture](docs/DDS_architecture.jpg")
+
+![Architecture](docs/DDS_architecture.jpg)
+
 
 The system consists of the following components:
 
