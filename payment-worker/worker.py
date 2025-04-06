@@ -11,6 +11,7 @@ from common.queue_utils import consume_events
 from common.request_utils import create_response_message, create_error_message
 from common.redis_utils import configure_redis, release_locks, attempt_acquire_locks
 import logging
+from common.idempotency_utils import cache_response_with_db,is_duplicate_message,cache_response_with_pipe
 
 db: redis.asyncio.cluster.RedisCluster = configure_redis()
 
@@ -59,26 +60,37 @@ async def find_user(user_id: str):
         is_json=True
     )
 
-async def add_credit(user_id: str, amount: int):
+async def add_credit(user_id: str, amount: int, correlation_id: str, message_type: str):
+    cached_response = await is_duplicate_message(db,correlation_id,message_type)
+    if cached_response is not None:
+        return cached_response
     try:
         if not await db.exists(user_id):
+            await cache_response_with_db(db,correlation_id,message_type,False)
             return create_error_message(f"User: {user_id} not found")
     except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
 
     # update credit, serialize and update database
     try:
-        new_balance = await db.incrby(user_id,amount=amount)
+        async with db.pipeline() as pipe:
+            pipe.incrby(user_id,amount=amount)
+            cache_response_with_pipe(pipe,correlation_id,message_type,True)
+            result = await pipe.execute()
     except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
+        await cache_response_with_db(db,correlation_id,message_type,False)
         return create_error_message(str(e))
 
     return create_response_message(
-        content=f"User: {user_id} credit updated to: {new_balance}",
+        content=f"User: {user_id} credit updated to:{result[0]}",
         is_json=False
     )
 
 
-async def remove_credit(user_id: str, amount: int):
+async def remove_credit(user_id: str, amount: int, correlation_id: str, message_type: str):
+    cached_response = await is_duplicate_message(db,correlation_id,message_type)
+    if cached_response is not None:
+        return cached_response
     # attempt to get lock
     if not await attempt_acquire_locks(db, [user_id]):
         return create_error_message("Failed to acquire necessary lock after multiple retries")
@@ -86,21 +98,27 @@ async def remove_credit(user_id: str, amount: int):
     try:
         credit = await db.get(user_id)
         if credit is None:
+            await cache_response_with_db(db,correlation_id,message_type,False)
             return create_error_message(f"User: {user_id} not found")
 
         credit = int(credit)
         amount = int(amount)
 
         if credit < amount:
+            await cache_response_with_db(db,correlation_id,message_type,False)
             return create_error_message(
                 error=f"User: {user_id} credit cannot get reduced below zero!"
             )
-        new_credit = await db.decrby(user_id, amount=amount)
+        async with db.pipeline() as pipe:
+            pipe.decrby(user_id, amount=amount)
+            cache_response_with_pipe(pipe,correlation_id,message_type,True)
+            result = await pipe.execute()
         return create_response_message(
-            content=f"User: {user_id} credit updated to: {new_credit}",
-            is_json=False
-        )
+                content=f"User: {user_id} credit updated to: {result[0]}",
+                is_json=False
+            )
     except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
+        await cache_response_with_db(db,correlation_id,message_type,False)
         return create_error_message(str(e))
     finally:
         await release_locks(db, [user_id])
@@ -120,11 +138,11 @@ async def process_message(message: AbstractIncomingMessage):
     elif message_type == MsgType.FIND:
         return await find_user(user_id=content['user_id'])
     elif message_type in (MsgType.ADD, MsgType.SAGA_PAYMENT_REVERSE):
-        return await add_credit(user_id=content['user_id'], amount=content["total_cost"])
+        return await add_credit(user_id=content['user_id'], amount=content["total_cost"], correlation_id=message.correlation_id, message_type=message_type)
     elif message_type == MsgType.SUBTRACT:
-        return await remove_credit(user_id=content['user_id'], amount=content["total_cost"])
+        return await remove_credit(user_id=content['user_id'], amount=content["total_cost"], correlation_id=message.correlation_id, message_type=message_type)
     elif message_type == MsgType.SAGA_INIT:
-        return await remove_credit(user_id=content['user_id'], amount=content['total_cost'])
+        return await remove_credit(user_id=content['user_id'], amount=content['total_cost'], correlation_id=message.correlation_id, message_type=message_type)
     elif message_type == MsgType.SAGA_STOCK_REVERSE:
         logging.error("THIS SHOULDN'T EVER HAPPEN BIG PROBLEMS IF IT DOES!")
         return None # Ignore

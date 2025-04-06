@@ -13,6 +13,7 @@ from common.msg_types import MsgType
 from common.queue_utils import consume_events, OrderWorkerClient
 from common.request_utils import create_response_message, create_error_message
 from common.redis_utils import configure_redis
+from common.idempotency_utils import cache_response_with_db, cache_response_with_pipe, is_duplicate_message
 from model import OrderValue
 
 GATEWAY_URL = os.environ['GATEWAY_URL']
@@ -85,10 +86,16 @@ async def find_order(order_id: str):
     )
 
 
-async def add_item(order_id: str, item_id: str, quantity: int):
+async def add_item(order_id: str, item_id: str, quantity: int, correlation_id: str, message_type: str):
+
+    cached_response = await is_duplicate_message(db,correlation_id,message_type)
+    if cached_response is not None:
+        return cached_response
+
     try:
         order_entry: OrderValue = await get_order_from_db(db, order_id)
         if order_entry is None:
+            await cache_response_with_db(correlation_id, message_type, False, db)
             return create_error_message(f"Order: {order_id} not found")
     except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
@@ -96,6 +103,7 @@ async def add_item(order_id: str, item_id: str, quantity: int):
     async with aiohttp.ClientSession() as session:
         async with session.get(f"{GATEWAY_URL}/stock/find/{item_id}/priority") as item_reply:
             if item_reply.status != 200:
+                await cache_response_with_db(correlation_id,message_type,False,db)
                 return create_error_message(
                     error=f"Item: {item_id} does not exist!"
                 )
@@ -106,8 +114,10 @@ async def add_item(order_id: str, item_id: str, quantity: int):
         async with db.pipeline() as pipe:
             pipe.rpush(f"{order_id}:items", item_id, quantity)
             pipe.hincrby(order_id, "total_cost", int(quantity * item_json["price"]))
+            cache_response_with_pipe(pipe,correlation_id,message_type,True)
             result = await pipe.execute()
     except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
+        await cache_response_with_db(db,correlation_id,message_type,False)
         return create_error_message(
             error = str(e)
         )
@@ -118,18 +128,29 @@ async def add_item(order_id: str, item_id: str, quantity: int):
     )
 
 
-async def checkout(order_id: str, correlation_id: str, reply_to: str):
+async def checkout(order_id: str, correlation_id: str, reply_to: str, message_type: str):
+    cached_response = await is_duplicate_message(db,correlation_id,message_type)
+    if cached_response is not None:
+        return cached_response
     try:
         order_entry: OrderValue = await get_order_from_db(db, order_id)
         if order_entry is None:
+            await cache_response_with_db(db,correlation_id,message_type,False)
             return create_error_message(f"Order: {order_id} not found")
     except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
         return create_error_message(str(e))
 
-    async with db.pipeline() as pipe:
-        pipe.hset(f"saga-{correlation_id}", mapping={'order_id': order_id, 'reply_to': reply_to})
-        pipe.expire(f"saga-{correlation_id}", SAGA_TIMEOUT)
-        await pipe.execute()
+    try:
+        async with db.pipeline() as pipe:
+            pipe.hset(f"saga-{correlation_id}", mapping={'order_id': order_id, 'reply_to': reply_to})
+            pipe.expire(f"saga-{correlation_id}", SAGA_TIMEOUT)
+            cache_response_with_pipe(pipe,correlation_id,message_type,True)
+            await pipe.execute()
+    except (redis.exceptions.RedisError, redis.exceptions.RedisClusterException) as e:
+        await cache_response_with_db(db,correlation_id,message_type,False)
+        return create_error_message(
+            error = str(e)
+        )
 
     await asyncio.gather(
         order_worker_client.call_with_route_no_reply(
@@ -168,9 +189,9 @@ async def process_message(message: AbstractIncomingMessage):
     elif message_type == MsgType.FIND:
         return await find_order(order_id=content['order_id'])
     elif message_type == MsgType.ADD:
-        return await add_item(order_id=content['order_id'], item_id=content['item_id'], quantity=content['quantity'])
+        return await add_item(order_id=content['order_id'], item_id=content['item_id'], quantity=content['quantity'], correlation_id=message.correlation_id, message_type=message_type)
     elif message_type == MsgType.CHECKOUT:
-        return await checkout(content['order_id'], message.correlation_id, reply_to=message.reply_to)
+        return await checkout(content['order_id'], message.correlation_id, reply_to=message.reply_to, message_type=message_type)
     elif message_type == MsgType.SAGA_PAYMENT_RESPONSE:
         return await handle_payment_saga_response(status_code=content['status'], correlation_id=message.correlation_id)
     elif message_type == MsgType.SAGA_STOCK_RESPONSE:
