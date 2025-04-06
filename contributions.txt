@@ -1,0 +1,5 @@
+Aayush:
+Andrea:
+Danae: readme, event prioritization, attempted/part of SAGA ~, REDIS exponential backoff & other small stuff
+Henry: Architecture design, REDIS Async Cluster impl, workers and publishers impl, SAGA impl,  migrating to Quart for async, decompose stock + payment database to primitive fields, scaling out, a tiny bit of work on locking, NGINX Hypercorn configuration, attempted true elastic scaling but Docker made it too hard.
+Vaishnav:
