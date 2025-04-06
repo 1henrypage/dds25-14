@@ -1,6 +1,7 @@
 import redis
 from msgspec import msgpack
 from common.request_utils import create_response_message, create_error_message
+import logging
 
 IDEMPOTENCY_EXPIRY = 60  # seconds
 
@@ -52,7 +53,7 @@ async def cache_response_with_db(db: redis.asyncio.cluster.RedisCluster, correla
         await db.set(idempotency_key, cache_value, ex=IDEMPOTENCY_EXPIRY)
     except Exception as e:
         # If caching fails, log but continue - it's not critical
-        print(f"Failed to cache response for {correlation_id}: {str(e)}")
+        logging.error(f"Failed to cache response for {correlation_id}: {str(e)}")
 
 def cache_response_with_pipe(pipe: redis.asyncio.cluster.ClusterPipeline, correlation_id: str, message_type: str, response: bool):
     """
@@ -75,4 +76,4 @@ def cache_response_with_pipe(pipe: redis.asyncio.cluster.ClusterPipeline, correl
         pipe.set(idempotency_key, cache_value, ex=IDEMPOTENCY_EXPIRY)
     except Exception as e:
         # If caching fails, log but continue - it's not critical
-        print(f"Failed to cache response for {correlation_id}: {str(e)}")
+        logging.error(f"Failed to cache response for {correlation_id}: {str(e)}")
