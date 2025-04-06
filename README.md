@@ -10,20 +10,21 @@ The system consists of the following components:
 
 - **Gateway**: Acts as the entry point for client requests.
 
-- **Publishers**: Responsible for dispatching requests to services while maintaining a local state for response listening.
+- **Publishers**: Responsible for dispatching requests to services and also listens for asynchronous responses.
 
-- **Stock, Order, and Payment Workers:** Each handles their specific domain. Each has multiple instances (x3) for reliability.
+- **Stock, Order, and Payment Workers:** Each handles their specific domain. Each has multiple instances for reliability (x10 workers) .
 
-- **RabbitMQ**: Used for asynchronous communication between services and clients.
+- **RabbitMQ**: Used for asynchronous communication between services and clients. Also used for retries assuming worker dies intermittently. 
 
-- **Sharded Databases**: Each worker/service maintains a distributed database with failover mechanisms.
+- **Sharded Databases**: Each worker/service maintains a distributed database with failover mechanisms (x3 master x3 replica)
 
 ### Database
 The database uses a **cluster of Redis nodes** for data storage, with each node serving a shard. If a node (master) fails, a replica is promoted to master. Replicas are for failover purposes and do not serve requests directly.
 
 **Sufficiency checks** are used during stock and payment processing to prevent issues such as dirty reads, lost updates, and non-repeatable reads.
 
-Redis uses **watching** and **TTL** (Time to Live) keys to avoid deadlocks during transactions.
+We use temporary locks with TTL to ensure that two transactions do not touch a critical path at the same time. Furthermore, we enforce a TTL on locks so that no deadlocks occur. 
+
 
 ### Important Notes
 - **Startup Time:** Please start issuing requests only after the entire system is up and running. This process takes approximately 30 seconds.
@@ -31,14 +32,18 @@ Redis uses **watching** and **TTL** (Time to Live) keys to avoid deadlocks durin
 - **Service Kill Policy:**
   - **Do not kill Gateway or Publishers,** as Publishers maintain local state for response listening. Killing them might cause **consistency issues**. 
   - Killing a **DB container** will lead to consistency issues during `consistency_test.py` due to the **exponential backoff strategy** and **queue retry strategy**. The DB failover stalls the retry until NGINX prematurely closes the connection with a 502 error.
+  - Killing queue will stop the system, see the reasons below why we didn't build redundancy into our queue. 
 
 #### Why We Didn't Distribute the Event Queue
-- NGINX prematurely closes connections, causing consistency issues as the client expects a synchronous response. 
+- NGINX prematurely closes connections, causing consistency issues as the client expects a synchronous response. In a usual setting, we could do this using retry queues, however, this would be of no use since this would cause inconsistencies with NGINX killing the connection.
 - Maintaining a centralized queue helps avoid unnecessary complexity and potential race conditions.
+- For this reason we also disabled the inbuilt message durability option that RabbitMQ offers which means messages are not persisted, this was done to increase throughput.
 
 #### Consistency Guarantees
 - Our system guarantees eventual consistency.
 - Failover strategies and retry mechanisms ensure that requests are eventually processed, even in the presence of failures.
+    - The queue retries sending if it doesn't receive an `ack()`
+    - Idempotency keys on `POST` and `PUT` operations.
 
 -----------
 
