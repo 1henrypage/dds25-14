@@ -1,5 +1,5 @@
 Aayush: implemented idempotency, architecture design discussion, other small code changes
-Andrea: retry mechanism and attempted idempontency + small report(if we will have it)
+Andrea: retry mechanism and attempted idempontency(have own version, not included in the final project), architecture design discussion 
 Danae: readme, event prioritization, attempted/part of SAGA ~, REDIS exponential backoff & other small stuff
 Henry: Architecture design, REDIS Async Cluster impl, workers and publishers impl, SAGA impl,  migrating to Quart for async, decompose stock + payment database to primitive fields, scaling out, a tiny bit of work on locking, NGINX Hypercorn configuration, attempted true elastic scaling but Docker made it too hard.
 Vaishnav: Attempted locking with redis watch switched to normal locking, design discussions
